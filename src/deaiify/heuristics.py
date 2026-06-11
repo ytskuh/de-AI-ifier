@@ -29,8 +29,8 @@ def _strip_tex_line(line: str) -> str:
     return line
 
 
-def paragraphs(path: Path) -> list[tuple[int, str]]:
-    """Return (start_line, prose_text) per paragraph, 1-based lines."""
+def paragraphs(path: Path) -> list[tuple[int, int, str]]:
+    """Return (start_line, end_line, prose_text) per paragraph, 1-based."""
     raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
     is_tex = path.suffix == ".tex"
     lines = raw
@@ -42,7 +42,7 @@ def paragraphs(path: Path) -> list[tuple[int, str]]:
                 lines = raw[i + 1:]
                 break
 
-    paras, cur, start, in_env, in_fence = [], [], None, 0, False
+    paras, cur, start, end, in_env, in_fence = [], [], None, None, 0, False
     for i, line in enumerate(lines):
         n = i + offset + 1
         if not is_tex and line.lstrip().startswith("```"):
@@ -68,12 +68,13 @@ def paragraphs(path: Path) -> list[tuple[int, str]]:
         if line.strip():
             if start is None:
                 start = n
+            end = n
             cur.append(line.strip())
         elif cur:
-            paras.append((start, " ".join(cur)))
-            cur, start = [], None
+            paras.append((start, end, " ".join(cur)))
+            cur, start, end = [], None, None
     if cur:
-        paras.append((start, " ".join(cur)))
+        paras.append((start, end, " ".join(cur)))
     return paras
 
 
@@ -85,10 +86,10 @@ def sentences(text: str) -> list[str]:
 def run(path: Path) -> tuple[list[Finding], dict]:
     paras = paragraphs(path)
     findings: list[Finding] = []
-    all_sents = [s for _, p in paras for s in sentences(p)]
+    all_sents = [s for *_, p in paras for s in sentences(p)]
     word_counts = [len(s.split()) for s in all_sents]
     metrics = {"paragraphs": len(paras), "sentences": len(all_sents),
-               "words": sum(len(p.split()) for _, p in paras)}
+               "words": sum(len(p.split()) for *_, p in paras)}
 
     if len(word_counts) >= 15:
         cv = statistics.stdev(word_counts) / statistics.mean(word_counts)
@@ -100,7 +101,7 @@ def run(path: Path) -> tuple[list[Finding], dict]:
                 f"lumpier (~0.5+). Vary: split some long sentences, fuse some short ones.",
                 payload={"cv": cv}))
 
-    para_words = [len(p.split()) for _, p in paras if len(p.split()) >= 10]
+    para_words = [len(p.split()) for *_, p in paras if len(p.split()) >= 10]
     if len(para_words) >= 8:
         cv = statistics.stdev(para_words) / statistics.mean(para_words)
         metrics["paragraph_length_cv"] = round(cv, 3)
@@ -111,7 +112,7 @@ def run(path: Path) -> tuple[list[Finding], dict]:
                 f"AI tell. Merge or split a few paragraphs.",
                 payload={"cv": cv}))
 
-    for start, p in paras:
+    for start, _end, p in paras:
         words = p.split()
         if len(words) < 50:
             continue

@@ -154,7 +154,7 @@ class _DocScorer:
     def _tokenize_family(self, key: str, model_file: str) -> dict | None:
         if key in self._family:
             return self._family[key]
-        sents = [(line, _clean(s)) for line, p in paragraphs(self.path) for s in sentences(p)]
+        sents = [(line, _clean(s)) for line, _end, p in paragraphs(self.path) for s in sentences(p)]
         sents = [(line, s) for line, s in sents if len(s.split()) >= 4]
         if len(sents) < 5:
             self._family[key] = None
@@ -301,7 +301,7 @@ def _max_window_share(positions: np.ndarray, n: int, w: int = HOT_WINDOW) -> flo
         return 0.0
     marks = np.zeros(n)
     marks[positions] = 1
-    csum = np.cumsum(marks)
+    csum = np.r_[0, np.cumsum(marks)]  # padded: includes the window at token 0
     return float((csum[w:] - csum[:-w]).max() / w)
 
 
@@ -374,51 +374,54 @@ def calibrate(paths: list[Path], only_pairs: list[str] | None = None) -> dict:
 
 def run(path: Path, pair_name: str | None = None,
         corpus_paths: list | None = None) -> tuple[list[Finding], dict]:
-    """Findings from the first available (or named) pair — used by report --stat.
-    Auto-calibrates the pair against the profile's corpus when bands are missing."""
+    """Findings for report --stat: EVERY available pair (design: per-pair
+    document scores + vendor-axis coverage), auto-calibrating each missing
+    pair against the profile corpus when one is provided."""
     import sys
-    pair = load_pairs(pair_name)[0]
-    if corpus_paths and "sent_b" not in load_bands().get(pair["name"], {}):
-        print(f"[stat] pair '{pair['name']}' is uncalibrated — calibrating against the "
-              f"profile corpus ({len(corpus_paths)} path(s)); one-time, takes minutes",
-              file=sys.stderr)
-        calibrate([Path(p) for p in corpus_paths], only_pairs=[pair["name"]])
-    res = score_pair(path, pair)
-    if res is None:
-        return [], {}
-    findings, doc = [], res["doc"]
-    band = load_bands().get(pair["name"], {})
-    band_note = f" ({doc['b_flag']})" if "b_flag" in doc else ""
-    if "sent_b" in band:
-        b_p01, b_p05, _ = band["sent_b"]
-        _, d_p95, d_p99 = band["sent_delta"]
-        for s in res["sentences"]:
-            if s["b"] < b_p05:
-                strong = s["b"] < b_p01
-                sev = 0.8 if strong else 0.65
-                findings.append(Finding(
-                    s["line"], (0, 0), "statistical", f"stat:{pair['name']}:machine_like",
-                    sev,
-                    f"B={s['b']:.3f} below human sentence band "
-                    f"({'p1' if strong else 'p5'}={b_p01 if strong else b_p05:.3f}) on "
-                    f"{pair['name']}; doc {doc['b']:.3f}{band_note}. Rewrite in your own "
-                    f"words; add a concrete fact or your phrasing.",
-                    match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
-            elif s["delta"] > d_p95:
-                findings.append(Finding(
-                    s["line"], (0, 0), "statistical", f"stat:{pair['name']}:performer_tilt",
-                    0.75 if s["delta"] > d_p99 else 0.6,
-                    f"Δ={s['delta']:+.3f} above human sentence band (p95={d_p95:+.3f}) — "
-                    f"leans toward {pair['axis'] or 'the performer'}.",
-                    match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
-    else:  # uncalibrated fallback: ranking only, labeled as such
-        for rank, s in enumerate(sorted(res["sentences"], key=lambda x: x["b"])[:TOP_K]):
-            findings.append(Finding(
-                s["line"], (0, 0), "statistical", f"stat:{pair['name']}:machine_like",
-                round(0.7 - 0.02 * rank, 2),
-                f"UNCALIBRATED ranking #{rank + 1} on {pair['name']} (B={s['b']:.3f}, "
-                f"doc {doc['b']:.3f}) — run `stat --calibrate` for thresholded flags.",
-                match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
-    metrics = {f"stat_{k}": v for k, v in doc.items()}
-    metrics["stat_pair"] = pair["name"]
+    pairs = load_pairs(pair_name)
+    if corpus_paths:
+        missing = [p["name"] for p in pairs if "sent_b" not in load_bands().get(p["name"], {})]
+        if missing:
+            print(f"[stat] uncalibrated pair(s) {missing} — calibrating against the "
+                  f"profile corpus; one-time, takes minutes", file=sys.stderr)
+            calibrate([Path(p) for p in corpus_paths], only_pairs=missing)
+    bands = load_bands()
+    scorer = _DocScorer(path)
+    findings, metrics = [], {}
+    for pair in pairs:
+        res = scorer.score(pair, bands)
+        if res is None:
+            continue
+        doc = res["doc"]
+        band = bands.get(pair["name"], {})
+        verdict = f" [{doc['b_flag']}]" if "b_flag" in doc else " [uncalibrated]"
+        findings.append(Finding(
+            0, (0, 0), "statistical", f"stat:{pair['name']}:doc",
+            0.7 if doc.get("b_flag") == "below human band" else 0.3,
+            f"{pair['name']} ({pair.get('axis', '')}): B={doc['b']}{verdict}, "
+            f"Δ={doc['delta_mean']:+.3f}, hot-burst={doc['hot_burstiness']:+.2f}.",
+            payload={"pair": pair["name"], **{k: doc[k] for k in ("b", "delta_mean")}}))
+        metrics[f"stat_{pair['name']}_b"] = doc["b"]
+        metrics[f"stat_{pair['name']}_delta"] = doc["delta_mean"]
+        if "sent_b" in band:
+            b_p01, b_p05, _ = band["sent_b"]
+            _, d_p95, d_p99 = band["sent_delta"]
+            for s in res["sentences"]:
+                if s["b"] < b_p05:
+                    strong = s["b"] < b_p01
+                    findings.append(Finding(
+                        s["line"], (0, 0), "statistical",
+                        f"stat:{pair['name']}:machine_like", 0.8 if strong else 0.65,
+                        f"B={s['b']:.3f} below human unit band "
+                        f"({'p1' if strong else 'p5'}) on {pair['name']}. Rewrite in your "
+                        f"own words; add a concrete fact or your phrasing.",
+                        match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
+                elif s["delta"] > d_p95:
+                    findings.append(Finding(
+                        s["line"], (0, 0), "statistical",
+                        f"stat:{pair['name']}:performer_tilt",
+                        0.75 if s["delta"] > d_p99 else 0.6,
+                        f"Δ={s['delta']:+.3f} above human unit band (p95={d_p95:+.3f}) — "
+                        f"leans toward {pair.get('axis') or 'the performer'}.",
+                        match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
     return findings, metrics

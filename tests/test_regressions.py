@@ -99,7 +99,7 @@ class LatexExtractionRegression(unittest.TestCase):
         p = Path("/tmp/deaiify_test_doc.tex")
         p.write_text(tex)
         paras = heuristics.paragraphs(p)
-        text = " ".join(t for _, t in paras)
+        text = " ".join(t for *_, t in paras)
         self.assertNotIn("documentclass", text)
         self.assertNotIn("mc^2", text)
         self.assertIn("We study the system", text)
@@ -189,6 +189,28 @@ class SimulatedBandInvariants(unittest.TestCase):
         a = simulated_bands(self._seg_data(), 5000, m=200)["f_x"]["band"]
         b = simulated_bands(self._seg_data(), 5000, m=200)["f_x"]["band"]
         self.assertEqual(a, b)
+
+
+
+
+class ReviewFindingsRegression(unittest.TestCase):
+    """Code-review findings 2026-06-11: window at token 0, segment end lines."""
+
+    def test_first_window_burst_counted(self):
+        import numpy as np
+        from deaiify.statistical import _max_window_share
+        # burst entirely inside the first 50 tokens must be fully reported
+        share = _max_window_share(np.arange(10), 200, w=50)
+        self.assertAlmostEqual(share, 10 / 50)
+
+    def test_paragraph_and_segment_end_lines(self):
+        from deaiify import heuristics, structural
+        p = Path("/tmp/deaiify_test_lines.md")
+        p.write_text("one two three\nfour five six\n\nseven eight\n")
+        paras = heuristics.paragraphs(p)
+        self.assertEqual([(a, b) for a, b, _ in paras], [(1, 2), (4, 4)])
+        segs = structural._segments(p)
+        self.assertEqual(segs[-1]["end"], 4)  # end = last paragraph's end line
 
 
 if __name__ == "__main__":

@@ -153,7 +153,7 @@ def _nlp():
 
 
 def prose(path: Path) -> str:
-    return "\n\n".join(text for _, text in paragraphs(path))
+    return "\n\n".join(text for *_, text in paragraphs(path))
 
 
 def biber_features(docs: list[tuple[str, str]], normalize: bool = True,
@@ -184,20 +184,22 @@ SEG_NULL_RATE = 0.10  # by construction ~10% of human segments fall outside [p5,
 
 def _segments(path: Path) -> list[dict]:
     """Paragraphs accumulated into ~SEGMENT_WORDS-word segments with line ranges."""
-    segs, cur, words, start = [], [], 0, None
-    for line, text in paragraphs(path):
+    segs, cur, words, start, last_end = [], [], 0, None, None
+    for line, end, text in paragraphs(path):
         if start is None:
             start = line
+        last_end = end
         cur.append(text)
         words += len(text.split())
         if words >= SEGMENT_WORDS:
-            segs.append({"start": start, "end": line, "text": "\n\n".join(cur), "words": words})
+            segs.append({"start": start, "end": last_end, "text": "\n\n".join(cur), "words": words})
             cur, words, start = [], 0, None
     if cur and segs and words < SEGMENT_WORDS // 2:
         segs[-1]["text"] += "\n\n" + "\n\n".join(cur)
         segs[-1]["words"] += words
+        segs[-1]["end"] = last_end
     elif cur:
-        segs.append({"start": start, "end": start, "text": "\n\n".join(cur), "words": words})
+        segs.append({"start": start, "end": last_end, "text": "\n\n".join(cur), "words": words})
     return segs
 
 

@@ -33,10 +33,11 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
     if len(files) < 3:
         raise SystemExit(f"need >=3 corpus files, got {len(files)}")
 
-    docs, doc_metrics = [], []
+    docs, doc_metrics, skipped = [], [], []
     for f in files:
         text = structural.prose(f)
         if len(text.split()) < 300:  # too short for stable per-1k rates
+            skipped.append(f.name)
             continue
         docs.append((f.name, text))
         h_findings, metrics = heuristics.run(f)
@@ -47,6 +48,11 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
             metrics["lexical_all_per_1k"] = 1000 * len(lex) / max(1, metrics["words"])
         doc_metrics.append(metrics)
 
+    if skipped:
+        print(f"  skipped {len(skipped)} file(s) under 300 prose words: {', '.join(skipped)}")
+    if len(docs) < 3:
+        raise SystemExit(f"only {len(docs)} usable document(s) after filtering — "
+                         f"percentile bands need >=3")
     feats = structural.biber_features(docs)
     features = {col: _band(feats[col].to_list())
                 for col in feats.columns if col != "doc_id"}

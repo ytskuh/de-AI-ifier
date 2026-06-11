@@ -39,7 +39,7 @@ def _all_findings(path: Path, profile_name: str | None, with_stat: bool = False)
         if profile_name:
             from . import baseline
             corpus = baseline.load(profile_name).get("corpus_paths")
-        sfind, smetrics = statistical.run(path, corpus_paths=corpus)
+        sfind, smetrics = statistical.run(path, corpus_paths=corpus)  # all pairs
         extra += sfind
         metrics.update(smetrics)
     return F.merge(lex + heur + extra), metrics
