@@ -31,7 +31,8 @@ MODELS = Path(os.environ.get("DEAIIFY_MODELS", ROOT / "models"))
 BANDS_FILE = MODELS / "stat-bands.json"
 N_CTX = 4096
 OVERLAP = 256
-TOP_K = 10
+TOP_K = 10           # display cap / uncalibrated-ranking fallback
+MIN_SENT_CONTENT = 15  # sentences below this many content tokens are not B/Δ-evaluated
 HOT_WINDOW = 50
 _PROBE = "We prove that the sampler converges; results follow."
 
@@ -226,7 +227,7 @@ class _DocScorer:
         for i, (line, s) in enumerate(fam["sents"]):
             m = (fam["tok_sent"] == i) & valid
             all_m = (fam["tok_sent"] == i) & scoreable
-            if m.sum() < 5 or m.sum() < 0.6 * all_m.sum():
+            if m.sum() < MIN_SENT_CONTENT or m.sum() < 0.6 * all_m.sum():
                 continue
             per_sent.append({
                 "i": i, "line": line, "text": s,
@@ -317,12 +318,19 @@ def calibrate(paths: list[Path]) -> dict:
         for p in load_pairs():
             r = scorer.score(p)
             if r:
-                per_pair.setdefault(p["name"], {"b": [], "delta": []})
-                per_pair[p["name"]]["b"].append(r["doc"]["b"])
-                per_pair[p["name"]]["delta"].append(r["doc"]["delta_mean"])
+                d = per_pair.setdefault(p["name"], {"b": [], "delta": [],
+                                                    "sb": [], "sd": []})
+                d["b"].append(r["doc"]["b"])
+                d["delta"].append(r["doc"]["delta_mean"])
+                d["sb"] += [s["b"] for s in r["sentences"]]
+                d["sd"] += [s["delta"] for s in r["sentences"]]
         print(f"  calibrated {f.name}")
-    q = lambda vs: [round(float(np.quantile(vs, p)), 4) for p in (0.05, 0.50, 0.95)]
-    bands = {name: {"b": q(v["b"]), "delta": q(v["delta"]), "n_docs": len(v["b"])}
+    q = lambda vs, ps: [round(float(np.quantile(vs, p)), 4) for p in ps]
+    bands = {name: {"b": q(v["b"], (0.05, 0.50, 0.95)),
+                    "delta": q(v["delta"], (0.05, 0.50, 0.95)),
+                    "sent_b": q(v["sb"], (0.01, 0.05, 0.50)),
+                    "sent_delta": q(v["sd"], (0.50, 0.95, 0.99)),
+                    "n_docs": len(v["b"]), "n_sentences": len(v["sb"])}
              for name, v in per_pair.items()}
     BANDS_FILE.write_text(json.dumps(bands, indent=1) + "\n")
     return bands
@@ -335,22 +343,38 @@ def run(path: Path, pair_name: str | None = None) -> tuple[list[Finding], dict]:
     if res is None:
         return [], {}
     findings, doc = [], res["doc"]
+    band = load_bands().get(pair["name"], {})
     band_note = f" ({doc['b_flag']})" if "b_flag" in doc else ""
-    for rank, s in enumerate(sorted(res["sentences"], key=lambda x: x["b"])[:TOP_K]):
-        findings.append(Finding(
-            s["line"], (0, 0), "statistical", f"stat:{pair['name']}:machine_like",
-            round(0.7 - 0.02 * rank, 2),
-            f"Most machine-like #{rank + 1} on {pair['name']} (B={s['b']:.3f}, "
-            f"doc {doc['b']:.3f}{band_note}): rewrite in your own words; add a "
-            f"concrete fact or your phrasing.",
-            match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
-    for rank, s in enumerate(sorted(res["sentences"], key=lambda x: -x["delta"])[:TOP_K]):
-        findings.append(Finding(
-            s["line"], (0, 0), "statistical", f"stat:{pair['name']}:performer_tilt",
-            round(0.6 - 0.02 * rank, 2),
-            f"Most {pair['axis'] or 'performer'}-tilted #{rank + 1} "
-            f"(Δ={s['delta']:+.3f}, doc {doc['delta_mean']:+.3f}).",
-            match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
+    if "sent_b" in band:
+        b_p01, b_p05, _ = band["sent_b"]
+        _, d_p95, d_p99 = band["sent_delta"]
+        for s in res["sentences"]:
+            if s["b"] < b_p05:
+                strong = s["b"] < b_p01
+                sev = 0.8 if strong else 0.65
+                findings.append(Finding(
+                    s["line"], (0, 0), "statistical", f"stat:{pair['name']}:machine_like",
+                    sev,
+                    f"B={s['b']:.3f} below human sentence band "
+                    f"({'p1' if strong else 'p5'}={b_p01 if strong else b_p05:.3f}) on "
+                    f"{pair['name']}; doc {doc['b']:.3f}{band_note}. Rewrite in your own "
+                    f"words; add a concrete fact or your phrasing.",
+                    match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
+            elif s["delta"] > d_p95:
+                findings.append(Finding(
+                    s["line"], (0, 0), "statistical", f"stat:{pair['name']}:performer_tilt",
+                    0.75 if s["delta"] > d_p99 else 0.6,
+                    f"Δ={s['delta']:+.3f} above human sentence band (p95={d_p95:+.3f}) — "
+                    f"leans toward {pair['axis'] or 'the performer'}.",
+                    match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
+    else:  # uncalibrated fallback: ranking only, labeled as such
+        for rank, s in enumerate(sorted(res["sentences"], key=lambda x: x["b"])[:TOP_K]):
+            findings.append(Finding(
+                s["line"], (0, 0), "statistical", f"stat:{pair['name']}:machine_like",
+                round(0.7 - 0.02 * rank, 2),
+                f"UNCALIBRATED ranking #{rank + 1} on {pair['name']} (B={s['b']:.3f}, "
+                f"doc {doc['b']:.3f}) — run `stat --calibrate` for thresholded flags.",
+                match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
     metrics = {f"stat_{k}": v for k, v in doc.items()}
     metrics["stat_pair"] = pair["name"]
     return findings, metrics

@@ -53,6 +53,7 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
                    key=lambda f: -f.payload["excess"])
     other_doc = [f for f in doc_level if "gloss" not in f.payload]
 
+    con.print("[bold]── Document profile ──[/]")
     if biber:
         tbl = Table(title="Structural rates vs baseline band (↑ above / ↓ below — "
                           "both directions matter; sorted by deviation)")
@@ -69,29 +70,24 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
                         f"{p05:.1f}–{p95:.1f}", f"{p['excess']:.1f}×",
                         p["hint"] or "—", style=sev(f.severity))
         con.print(tbl)
-    if other_doc:
-        con.print("[bold]Document-level[/]:")
-        for f in sorted(other_doc, key=lambda f: -f.severity):
-            con.print(f"  • {f.message}", style=sev(f.severity))
+    for f in sorted(other_doc, key=lambda f: -f.severity):
+        con.print(f"  • {f.message}", style=sev(f.severity))
+    if biber or other_doc:
         con.print()
 
     by_rule: dict[str, list[Finding]] = {}
     for f in line_level:
         by_rule.setdefault(f.rule, []).append(f)
-    top = Table(title="Top rules (occurrence counts)", show_lines=False)
-    top.add_column("hits", justify="right")
-    top.add_column("rule")
-    top.add_column("example", overflow="fold", max_width=50)
-    for rule, fs in sorted(by_rule.items(), key=lambda kv: -len(kv[1]))[:15]:
-        top.add_row(str(len(fs)), rule, fs[0].match or fs[0].message[:50],
-                    style=sev(max(f.severity for f in fs)))
-    con.print(top)
+    recurring = [f"{rule}×{len(fs)}" for rule, fs in
+                 sorted(by_rule.items(), key=lambda kv: -len(kv[1])) if len(fs) >= 3]
+    if recurring:
+        con.print("[bold]── Recurring patterns ──[/]  " + "  ".join(recurring[:10]) + "\n")
 
-    tbl = Table(title="Findings by location")
+    tbl = Table(title="Edit worklist (top to bottom alongside the document)")
     tbl.add_column("line", justify="right")
     tbl.add_column("sev")
     tbl.add_column("match", max_width=28, overflow="fold")
-    tbl.add_column("message", overflow="fold")
+    tbl.add_column("what to do", overflow="fold")
     for f in line_level:
         label = "ERR" if f.severity >= 0.9 else ("WARN" if f.severity >= 0.6 else "sugg")
         tbl.add_row(str(f.line), label, f.match, f.message, style=sev(f.severity))

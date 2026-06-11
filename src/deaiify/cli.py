@@ -97,8 +97,21 @@ def cmd_stat(args) -> int:
             for cls, c in sorted(r["token_classes"].items(), key=lambda kv: -kv[1]["delta_mean"]):
                 print(f"  {cls:12s} {c['n']:5d} {c['delta_mean']:+7.3f} {c['delta_q90']:+7.3f} "
                       f"{100*c['hot_share']:4.0f}% {c['logppl_perf']:7.3f}")
-        for s in sorted(r["sentences"], key=lambda x: x["b"])[:args.top]:
-            print(f"    L{s['line']:4d} B={s['b']:.3f} Δ={s['delta']:+.3f} hot={s['hot_share']:.2f}  {s['text'][:64]!r}")
+        band = statistical.load_bands().get(r["pair"], {})
+        if "sent_b" in band:
+            b_p05 = band["sent_b"][1]
+            d_p95 = band["sent_delta"][1]
+            flagged = [s for s in r["sentences"] if s["b"] < b_p05 or s["delta"] > d_p95]
+            flagged.sort(key=lambda s: s["b"])
+            print(f"  flagged sentences (B<p5={b_p05:.3f} or Δ>p95={d_p95:+.3f}): "
+                  f"{len(flagged)} of {len(r['sentences'])} eligible")
+            for s in flagged[:args.top or len(flagged)]:
+                print(f"    L{s['line']:4d} B={s['b']:.3f} Δ={s['delta']:+.3f}  {s['text'][:64]!r}")
+            if args.top and len(flagged) > args.top:
+                print(f"    … +{len(flagged) - args.top} more (raise --top)")
+        else:
+            for s in sorted(r["sentences"], key=lambda x: x["b"])[:args.top]:
+                print(f"    L{s['line']:4d} B={s['b']:.3f} Δ={s['delta']:+.3f} hot={s['hot_share']:.2f}  {s['text'][:64]!r} [uncalibrated ranking]")
     return 0
 
 
