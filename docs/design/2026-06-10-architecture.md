@@ -46,12 +46,19 @@ Above all three: content genericity (paragraphs with no numbers/names/citations/
 ## CLI surface
 
 ```
-deaiify report <file> [--profile NAME] [--stat] [--min-severity X] [--json]
+deaiify report <file> [--profile NAME] [--stat [fast|full]] [--min-severity X] [--json]
 deaiify stat <file> [--pair NAME|all] [--classes] [--consensus] [--top N]
 deaiify baseline build --name NAME <files-or-dirs>
 deaiify stat --calibrate <files-or-dirs>      # per-pair human bands, see below
 deaiify fix <file>                            # BANNED: warns and exits
 ```
+
+Statistical depth: FAST (default) scores only the default pair — the strongest
+validated detector, first in pairs.json — and emits an explicit note naming the
+skipped vendor axes, so a fast run never reads as full coverage. FULL
+(`--stat full`, or `stat --pair all`) scores every available pair. The bare
+`stat` command defaults to fast (its default pair) as well; `--consensus`
+implies full.
 
 Decisions made and to hold:
 
