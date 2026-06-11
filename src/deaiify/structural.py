@@ -178,7 +178,7 @@ def biber_features(docs: list[tuple[str, str]], normalize: bool = True,
 
 SEGMENT_WORDS = 1000
 MIN_SEGMENTS = 4
-SEG_FDR_Q = 0.10
+SEG_P_CUTOFF = 0.05
 SEG_NULL_RATE = 0.10  # by construction ~10% of human segments fall outside [p5,p95]
 
 
@@ -211,17 +211,6 @@ def _empirical_two_sided_p(value: float, reference: "np.ndarray") -> float:
     lo = (1 + int((reference <= value).sum())) / (n + 1)
     hi = (1 + int((reference >= value).sum())) / (n + 1)
     return float(min(1.0, 2 * min(lo, hi)))
-
-
-def _bh_select(pvals: list[tuple[str, float]], q: float) -> set[str]:
-    """Benjamini-Hochberg: names whose p-value passes FDR level q."""
-    m = len(pvals)
-    ordered = sorted(pvals, key=lambda t: t[1])
-    thresh_rank = 0
-    for rank, (_, p) in enumerate(ordered, 1):
-        if p <= q * rank / m:
-            thresh_rank = rank
-    return {name for name, _ in ordered[:thresh_rank]}
 
 
 def segment_findings(path: Path, profile: dict) -> list[Finding]:
@@ -262,8 +251,7 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
         tested[col] = (float(seg_p.min()), seg_p, side, rates, (p05, p95), beyond)
     if not tested:
         return []
-    selected = _bh_select([(c_, v[0]) for c_, v in tested.items()], SEG_FDR_Q)
-    bh_cutoff = SEG_FDR_Q * max(1, len(selected)) / max(1, len(tested))
+    selected = [c_ for c_, v in tested.items() if v[0] < SEG_P_CUTOFF]
 
     findings = []
     for col in selected:
@@ -288,11 +276,11 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
         findings.append(Finding(
             0, (0, 0), "structural", f"biber-seg:{col}", round(sev, 2),
             f"{gloss}: most extreme segment p={p_min:.3f} (min over segments, no "
-            f"independence assumed); {n_out}/{len(segs)} segments outside the human "
+            f"independence assumed; cutoff {SEG_P_CUTOFF}); {n_out}/{len(segs)} segments outside the human "
             f"segment range [{p05:.1f}–{p95:.1f}]; doc rate {doc_rate:.1f}/1k; "
             f"worst: {'; '.join(outliers)}{hidden}.",
             payload={"p": p_min, "at_floor": at_floor, "beyond": round(beyond, 2),
-                     "m_tested": len(tested), "bh_cutoff": round(bh_cutoff, 4),
+                     "m_tested": len(tested),
                      "doc_rate": round(doc_rate, 2), "in_band": in_band,
                      "gloss_seg": gloss, "map": seg_map, "outliers": outliers,
                      "band": [round(p05, 2), round(p95, 2)], "n_out": n_out}))

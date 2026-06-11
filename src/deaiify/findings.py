@@ -77,11 +77,9 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
     if seg:
         n_seg = len(seg[0].payload["map"])
         m = seg[0].payload.get("m_tested", "?")
-        cut = seg[0].payload.get("bh_cutoff")
         st = Table(title=f"Segments vs HUMAN segment band ({n_seg} segments; map: "
                          f"↑ above / · in band / ↓ below the profile's 1k-segment band; "
-                         f"BH FDR 0.10 over {m} tested features"
-                         + (f", effective p cutoff {cut}" if cut else "") + ")")
+                         f"fixed cutoff p<0.05, {m} features tested — expect ~{max(1, round(0.05 * (m if isinstance(m, int) else 20)))} chance flag(s))")
         st.add_column("feature", overflow="fold", max_width=30)
         st.add_column("p", justify="right")
         st.add_column("rate/1k", justify="right")

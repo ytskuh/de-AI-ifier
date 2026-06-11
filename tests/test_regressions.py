@@ -131,13 +131,6 @@ class SegmentBandInvariants(unittest.TestCase):
                              [_empirical_two_sided_p(60.0, ref)] * 11)
         self.assertEqual(p_alone, p_with_normals)
 
-    def test_bh_select(self):
-        from deaiify.structural import _bh_select
-        pvals = [("a", 0.001), ("b", 0.04), ("c", 0.9)]
-        sel = _bh_select(pvals, 0.10)
-        self.assertIn("a", sel)
-        self.assertNotIn("c", sel)
-
 
 class UnitMergingInvariants(unittest.TestCase):
     """Units merge short sentences forward — no prose sentence is skipped
