@@ -356,6 +356,344 @@
    5.545
   ]
  },
+ "features_seg": {
+  "f_01_past_tense": [
+   0.0,
+   2.837,
+   9.574
+  ],
+  "f_02_perfect_aspect": [
+   0.0,
+   1.357,
+   6.25
+  ],
+  "f_03_present_tense": [
+   33.929,
+   63.444,
+   80.432
+  ],
+  "f_04_place_adverbials": [
+   0.0,
+   1.131,
+   4.908
+  ],
+  "f_05_time_adverbials": [
+   0.0,
+   1.255,
+   6.25
+  ],
+  "f_06_first_person_pronouns": [
+   2.911,
+   24.619,
+   46.03
+  ],
+  "f_07_second_person_pronouns": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "f_08_third_person_pronouns": [
+   0.0,
+   1.129,
+   5.97
+  ],
+  "f_09_pronoun_it": [
+   0.971,
+   4.459,
+   12.791
+  ],
+  "f_10_demonstrative_pronoun": [
+   0.0,
+   3.074,
+   10.189
+  ],
+  "f_11_indefinite_pronouns": [
+   0.0,
+   0.0,
+   0.99
+  ],
+  "f_12_proverb_do": [
+   0.0,
+   0.0,
+   1.374
+  ],
+  "f_13_wh_question": [
+   0.0,
+   0.0,
+   1.786
+  ],
+  "f_14_nominalizations": [
+   16.847,
+   38.889,
+   61.111
+  ],
+  "f_15_gerunds": [
+   0.0,
+   1.795,
+   5.574
+  ],
+  "f_16_other_nouns": [
+   188.341,
+   281.111,
+   483.835
+  ],
+  "f_17_agentless_passives": [
+   1.647,
+   9.772,
+   20.57
+  ],
+  "f_18_by_passives": [
+   0.0,
+   1.572,
+   6.63
+  ],
+  "f_19_be_main_verb": [
+   1.203,
+   6.977,
+   13.1
+  ],
+  "f_20_existential_there": [
+   0.0,
+   1.071,
+   5.896
+  ],
+  "f_21_that_verb_comp": [
+   0.0,
+   4.717,
+   13.095
+  ],
+  "f_22_that_adj_comp": [
+   0.0,
+   0.903,
+   4.603
+  ],
+  "f_23_wh_clause": [
+   0.0,
+   0.0,
+   2.442
+  ],
+  "f_24_infinitives": [
+   1.456,
+   8.511,
+   17.442
+  ],
+  "f_25_present_participle": [
+   0.0,
+   2.101,
+   7.126
+  ],
+  "f_26_past_participle": [
+   0.0,
+   0.0,
+   1.418
+  ],
+  "f_27_past_participle_whiz": [
+   0.0,
+   3.261,
+   8.079
+  ],
+  "f_28_present_participle_whiz": [
+   0.0,
+   1.163,
+   5.587
+  ],
+  "f_29_that_subj": [
+   0.0,
+   1.087,
+   5.006
+  ],
+  "f_30_that_obj": [
+   0.0,
+   0.0,
+   1.221
+  ],
+  "f_31_wh_subj": [
+   0.0,
+   0.0,
+   3.88
+  ],
+  "f_32_wh_obj": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "f_33_pied_piping": [
+   0.0,
+   0.0,
+   2.933
+  ],
+  "f_34_sentence_relatives": [
+   0.0,
+   1.786,
+   4.888
+  ],
+  "f_35_because": [
+   0.0,
+   0.0,
+   2.09
+  ],
+  "f_36_though": [
+   0.0,
+   0.0,
+   1.117
+  ],
+  "f_37_if": [
+   0.0,
+   2.008,
+   8.487
+  ],
+  "f_38_other_adv_sub": [
+   0.956,
+   5.006,
+   11.312
+  ],
+  "f_39_prepositions": [
+   90.0,
+   128.205,
+   155.357
+  ],
+  "f_40_adj_attr": [
+   31.117,
+   62.0,
+   99.688
+  ],
+  "f_41_adj_pred": [
+   0.0,
+   5.736,
+   11.561
+  ],
+  "f_42_adverbs": [
+   19.9,
+   46.185,
+   81.433
+  ],
+  "f_43_type_token": [
+   0.619,
+   0.667,
+   0.724
+  ],
+  "f_44_mean_word_length": [
+   4.168,
+   4.929,
+   5.658
+  ],
+  "f_45_conjuncts": [
+   2.105,
+   9.346,
+   16.447
+  ],
+  "f_46_downtoners": [
+   0.0,
+   2.09,
+   6.79
+  ],
+  "f_47_hedges": [
+   0.0,
+   0.0,
+   0.934
+  ],
+  "f_48_amplifiers": [
+   0.0,
+   1.001,
+   3.185
+  ],
+  "f_49_emphatics": [
+   0.0,
+   1.98,
+   5.357
+  ],
+  "f_50_discourse_particles": [
+   0.0,
+   0.0,
+   1.418
+  ],
+  "f_51_demonstratives": [
+   0.0,
+   5.187,
+   12.752
+  ],
+  "f_52_modal_possibility": [
+   0.893,
+   5.869,
+   13.092
+  ],
+  "f_53_modal_necessity": [
+   0.0,
+   0.0,
+   2.075
+  ],
+  "f_54_modal_predictive": [
+   0.0,
+   1.122,
+   11.272
+  ],
+  "f_55_verb_public": [
+   0.0,
+   2.829,
+   7.315
+  ],
+  "f_56_verb_private": [
+   4.854,
+   17.566,
+   38.687
+  ],
+  "f_57_verb_suasive": [
+   0.0,
+   2.89,
+   7.16
+  ],
+  "f_58_verb_seem": [
+   0.0,
+   0.0,
+   2.026
+  ],
+  "f_59_contractions": [
+   0.0,
+   0.0,
+   0.779
+  ],
+  "f_60_that_deletion": [
+   0.0,
+   0.0,
+   2.026
+  ],
+  "f_61_stranded_preposition": [
+   0.0,
+   7.143,
+   22.455
+  ],
+  "f_62_split_infinitive": [
+   0.0,
+   0.0,
+   1.261
+  ],
+  "f_63_split_auxiliary": [
+   0.0,
+   2.378,
+   7.172
+  ],
+  "f_64_phrasal_coordination": [
+   0.0,
+   4.082,
+   11.22
+  ],
+  "f_65_clausal_coordination": [
+   0.702,
+   3.61,
+   12.791
+  ],
+  "f_66_neg_synthetic": [
+   0.0,
+   0.0,
+   2.008
+  ],
+  "f_67_neg_analytic": [
+   0.0,
+   1.647,
+   7.315
+  ]
+ },
+ "n_segments": 116,
  "metrics": {
   "sentence_length_cv": [
    0.497,

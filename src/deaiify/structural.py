@@ -276,9 +276,14 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
 
 
 def run(path: Path, profile: dict) -> list[Finding]:
-    feats = biber_features([(path.name, prose(path))]).to_dicts()[0]
+    text = prose(path)
+    feats = biber_features([(path.name, text)]).to_dicts()[0]
+    # granularity-matched bands: short targets compare against 1k-segment bands
+    use_seg = (len(text.split()) < 2500 and profile.get("features_seg"))
+    band_set = profile["features_seg"] if use_seg else profile["features"]
+    basis = "1k-seg" if use_seg else "doc"
     flagged = []
-    for col, band in profile["features"].items():
+    for col, band in band_set.items():
         p05, p50, p95 = band
         v = feats.get(col)
         if v is None or p05 <= v <= p95:
@@ -298,7 +303,7 @@ def run(path: Path, profile: dict) -> list[Finding]:
         flagged.append((excess, Finding(
             0, (0, 0), "structural", f"biber:{col}", round(sev, 2), msg,
             payload={"value": v, "band": band, "key_tell": key, "excess": round(excess, 2),
-                     "gloss": gloss, "arrow": arrow, "hint": hint})))
+                     "gloss": gloss, "arrow": arrow, "hint": hint, "band_basis": basis})))
     flagged.sort(key=lambda t: -t[0])
     out = [f for _, f in flagged[:MAX_FINDINGS]]
     out += segment_findings(path, profile)

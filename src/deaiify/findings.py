@@ -58,8 +58,9 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
 
     con.print("[bold]── Document profile ──[/]")
     if biber:
-        tbl = Table(title="Structural rates vs baseline band (↑ above / ↓ below — "
-                          "both directions matter; sorted by deviation)")
+        basis = biber[0].payload.get("band_basis", "doc")
+        tbl = Table(title=f"Structural rates vs baseline band [{basis} granularity] "
+                          f"(↑ above / ↓ below — both directions matter; sorted by deviation)")
         tbl.add_column("feature", overflow="fold", max_width=34)
         tbl.add_column("rate/1k", justify="right")
         tbl.add_column("", justify="center")  # direction arrow

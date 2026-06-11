@@ -50,6 +50,19 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
     feats = structural.biber_features(docs)
     features = {col: _band(feats[col].to_list())
                 for col in feats.columns if col != "doc_id"}
+
+    # segment-granularity bands: rate variance shrinks with length, so short
+    # targets and per-segment checks need bands from same-sized human text
+    seg_docs = []
+    for f in files:
+        for j, seg in enumerate(structural._segments(f)):
+            if seg["words"] >= structural.SEGMENT_WORDS // 2:
+                seg_docs.append((f"{f.name}#s{j}", seg["text"]))
+    features_seg = {}
+    if len(seg_docs) >= 10:
+        seg_feats = structural.biber_features(seg_docs)
+        features_seg = {col: _band(seg_feats[col].to_list())
+                        for col in seg_feats.columns if col != "doc_id"}
     metric_bands = {}
     for key in ("sentence_length_cv", "paragraph_length_cv",
                 "lexical_warn_per_1k", "lexical_all_per_1k"):
@@ -59,6 +72,7 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
 
     return {"name": name, "language": "en", "n_docs": len(docs),
             "docs": [d for d, _ in docs], "features": features,
+            "features_seg": features_seg, "n_segments": len(seg_docs),
             "metrics": metric_bands}
 
 
