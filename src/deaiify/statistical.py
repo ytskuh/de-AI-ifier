@@ -1,25 +1,19 @@
 """Statistical layer: observer/performer scoring over configured model pairs.
 
-Pairs live in models/pairs.json (observer = pretrained base, performer =
-instruct/distill with plain-text-identical tokenizer). Per pair, per sentence
-(formula matched to ahans30/Binoculars):
-- B = logPPL_performer(text) / xent, xent = -sum_v P_observer(v) log P_performer(v).
-  LOW B = machine-typical.
-- delta = mean logP_performer(tok) - logP_observer(tok): the log-likelihood
-  ratio. HIGH = leans toward the performer's (RLHF/vendor) distribution.
+Design (docs/design/2026-06-10-architecture.md, statistical layer):
+- pairs in models/pairs.json; plain-text tokenizer identity asserted per pair
+- per token: logprob under both models; delta = lp_perf - lp_obs;
+  xent = -sum_v P_obs(v) log P_perf(v)   (ahans30/Binoculars reference formula)
+- per sentence/doc on CONTENT tokens only: B = logPPL_perf / xent (low = machine),
+  delta quantiles, hot-token clustering, token-class distributions
+- efficiency: tokenize once per tokenizer family; evaluate each unique model once
+  (cache lp + fp16 log-softmax); derive every pair from the cache. Chunks overlap
+  by OVERLAP tokens; only positions with that much context are scored.
+- calibration: per-pair human bands (p5/50/95 of doc B and delta) from a human
+  corpus, stored in models/stat-bands.json; scores annotated against the band.
+- consensus: per-sentence mean normalized B-rank + delta>0 votes across pairs.
 
-Aggregates are computed on CONTENT tokens only (tokens whose text contains a
-letter): punctuation, digits, and markup remnants are not authorial choices
-and dilute the signal. Beyond means, distribution shape is reported:
-- delta quantiles (q10/q50/q90) — a fat right tail betrays localized tilt a
-  mean would bury;
-- hot-token concentration: hot = delta above the doc's q90; burstiness of
-  gaps between hot tokens (-1 regular .. 0 Poisson .. +1 clustered) and the
-  max share of hot tokens in any 50-token window. Clustered hot tokens =
-  specific machine-flavored passages; spread = global register effect.
-
-Output is a RANKING, never a verdict — thresholds don't transfer across pairs.
-Requires the [stat] extra (llama-cpp-python).
+Output is always a ranking/annotation, never an AI/human verdict.
 """
 
 import json
@@ -34,18 +28,20 @@ from .heuristics import paragraphs, sentences
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = Path(os.environ.get("DEAIIFY_MODELS", ROOT / "models"))
+BANDS_FILE = MODELS / "stat-bands.json"
 N_CTX = 4096
+OVERLAP = 256
 TOP_K = 10
 HOT_WINDOW = 50
+_PROBE = "We prove that the sampler converges; results follow."
 
 
 def load_pairs(only: str | None = None) -> list[dict]:
     cfg = MODELS / "pairs.json"
     if not cfg.exists():
         raise SystemExit(f"no pair registry at {cfg}")
-    pairs = json.loads(cfg.read_text())
-    pairs = [p for p in pairs if (MODELS / p["observer"]).exists()
-             and (MODELS / p["performer"]).exists()]
+    pairs = [p for p in json.loads(cfg.read_text())
+             if (MODELS / p["observer"]).exists() and (MODELS / p["performer"]).exists()]
     if only:
         pairs = [p for p in pairs if p["name"] == only]
         if not pairs:
@@ -53,6 +49,12 @@ def load_pairs(only: str | None = None) -> list[dict]:
     if not pairs:
         raise SystemExit("no pair has both model files on disk")
     return pairs
+
+
+def load_bands() -> dict:
+    if BANDS_FILE.exists():
+        return json.loads(BANDS_FILE.read_text())
+    return {}
 
 
 def _clean(s: str) -> str:
@@ -67,33 +69,6 @@ def _log_softmax(x: np.ndarray) -> np.ndarray:
     return x - np.log(np.exp(x).sum(axis=-1, keepdims=True))
 
 
-def _doc_tokens(path: Path, model_path: Path):
-    """Sentence inventory + tokenization + per-token sentence index, text, byte span."""
-    from llama_cpp import Llama
-
-    sents = [(line, _clean(s)) for line, p in paragraphs(path) for s in sentences(p)]
-    sents = [(line, s) for line, s in sents if len(s.split()) >= 4]
-    if len(sents) < 5:
-        return None
-    text = "\n".join(s for _, s in sents)
-    llm = Llama(model_path=str(model_path), n_ctx=N_CTX, vocab_only=True, verbose=False)
-    tokens = llm.tokenize(text.encode("utf-8"), add_bos=True)
-    bounds, pos = [], 0
-    for _, s in sents:
-        pos += len(s.encode("utf-8")) + 1
-        bounds.append(pos)
-    tok_sent, tok_text, tok_span, cum = [], [], [], 0
-    for t in tokens:
-        piece = llm.detokenize([t])
-        tok_span.append((cum, cum + len(piece)))
-        cum += len(piece)
-        i = int(np.searchsorted(bounds, max(cum - 1, 0), side="right"))
-        tok_sent.append(min(i, len(sents) - 1))
-        tok_text.append(piece.decode("utf-8", errors="replace"))
-    del llm
-    return sents, text, tokens, np.asarray(tok_sent), tok_text, tok_span
-
-
 TRANSITIONS = {"however", "moreover", "furthermore", "additionally", "thus", "therefore",
                "hence", "consequently", "nevertheless", "nonetheless", "meanwhile",
                "specifically", "notably", "importantly", "interestingly", "overall",
@@ -106,7 +81,6 @@ _POS_CLASS = {"PROPN": "proper_noun", "NOUN": "noun", "VERB": "verb", "AUX": "ve
 
 
 def _token_classes(text: str, tok_span: list[tuple]) -> list[str]:
-    """Class label per model token, via spaCy POS aligned in byte space."""
     from .structural import _nlp
     doc = _nlp()(text)
     byte_of = np.cumsum([0] + [len(c.encode("utf-8")) for c in text])
@@ -114,11 +88,10 @@ def _token_classes(text: str, tok_span: list[tuple]) -> list[str]:
     for t in doc:
         if t.is_space:
             continue
-        label = ("transition" if t.text.lower() in TRANSITIONS
-                 else _POS_CLASS.get(t.pos_, "symbol"))
+        labels.append("transition" if t.text.lower() in TRANSITIONS
+                      else _POS_CLASS.get(t.pos_, "symbol"))
         starts.append(int(byte_of[t.idx]))
         ends.append(int(byte_of[t.idx + len(t.text)]))
-        labels.append(label)
     starts, ends = np.asarray(starts), np.asarray(ends)
     out = []
     for s, e in tok_span:
@@ -128,29 +101,164 @@ def _token_classes(text: str, tok_span: list[tuple]) -> list[str]:
     return out
 
 
-def _score(model_path: Path, chunks: list[list[int]]):
-    """Per-token logprob of actual tokens + per-chunk fp16 log-softmax."""
-    from llama_cpp import Llama
+class _DocScorer:
+    """Scores one document across pairs, evaluating each unique model once."""
 
-    llm = Llama(model_path=str(model_path), n_ctx=N_CTX, n_gpu_layers=-1,
-                logits_all=True, verbose=False)
-    lps, lsms = [], []
-    for chunk in chunks:
-        llm.reset()
-        llm.eval(chunk)
-        logits = np.asarray(llm.scores[:len(chunk)], dtype=np.float32)
-        lsm = _log_softmax(logits[:-1])
-        actual = np.asarray(chunk[1:])
-        lp = np.full(len(chunk), np.nan, dtype=np.float32)
-        lp[1:] = lsm[np.arange(len(actual)), actual]
-        lps.append(lp)
-        lsms.append(lsm.astype(np.float16))
-    del llm
-    return np.concatenate(lps), lsms
+    def __init__(self, path: Path):
+        self.path = path
+        self._family = {}   # family key -> doc tokenization dict
+        self._evals = {}    # model file -> (family_key, lp, [lsm fp16 per chunk], [score slices])
+        self._classes = None
+
+    def _vocab(self, model_file: str):
+        from llama_cpp import Llama
+        return Llama(model_path=str(MODELS / model_file), n_ctx=N_CTX,
+                     vocab_only=True, verbose=False)
+
+    def _family_key(self, model_file: str) -> str:
+        v = self._vocab(model_file)
+        key = ",".join(map(str, v.tokenize(_PROBE.encode(), add_bos=False)))
+        del v
+        return key
+
+    def _tokenize_family(self, key: str, model_file: str) -> dict | None:
+        if key in self._family:
+            return self._family[key]
+        sents = [(line, _clean(s)) for line, p in paragraphs(self.path) for s in sentences(p)]
+        sents = [(line, s) for line, s in sents if len(s.split()) >= 4]
+        if len(sents) < 5:
+            self._family[key] = None
+            return None
+        text = "\n".join(s for _, s in sents)
+        v = self._vocab(model_file)
+        tokens = v.tokenize(text.encode("utf-8"), add_bos=True)
+        bounds, pos = [], 0
+        for _, s in sents:
+            pos += len(s.encode("utf-8")) + 1
+            bounds.append(pos)
+        tok_sent, tok_span, tok_text, cum = [], [], [], 0
+        for t in tokens:
+            piece = v.detokenize([t])
+            tok_span.append((cum, cum + len(piece)))
+            tok_text.append(piece.decode("utf-8", errors="replace"))
+            cum += len(piece)
+            i = int(np.searchsorted(bounds, max(cum - 1, 0), side="right"))
+            tok_sent.append(min(i, len(sents) - 1))
+        del v
+        # overlapping chunks: chunk i starts at i*(N_CTX-OVERLAP); positions with
+        # less than OVERLAP context (except in the first chunk) are not scored
+        step = N_CTX - OVERLAP
+        chunks, scored = [], []
+        for s0 in range(0, len(tokens), step):
+            chunk = tokens[s0:s0 + N_CTX]
+            first_scored = 1 if s0 == 0 else OVERLAP
+            chunks.append(chunk)
+            scored.append((s0, first_scored, len(chunk)))
+            if s0 + N_CTX >= len(tokens):
+                break
+        if self._classes is None:
+            self._classes = np.asarray(_token_classes(text, tok_span))
+        self._family[key] = {
+            "sents": sents, "tokens": tokens, "tok_sent": np.asarray(tok_sent),
+            "content": np.array([bool(re.search(r"[a-zA-Z]", t)) for t in tok_text]),
+            "chunks": chunks, "scored": scored, "n": len(tokens),
+        }
+        return self._family[key]
+
+    def _eval(self, model_file: str, fam: dict):
+        if model_file in self._evals:
+            return self._evals[model_file]
+        from llama_cpp import Llama
+        llm = Llama(model_path=str(MODELS / model_file), n_ctx=N_CTX,
+                    n_gpu_layers=-1, logits_all=True, verbose=False)
+        lp = np.full(fam["n"], np.nan, dtype=np.float32)
+        lsms = []
+        for chunk, (s0, first, clen) in zip(fam["chunks"], fam["scored"]):
+            llm.reset()
+            llm.eval(chunk)
+            logits = np.asarray(llm.scores[:clen], dtype=np.float32)
+            lsm = _log_softmax(logits[:-1])
+            actual = np.asarray(chunk[1:])
+            lp_chunk = lsm[np.arange(clen - 1), actual]
+            lp[s0 + first:s0 + clen] = lp_chunk[first - 1:]
+            lsms.append(lsm.astype(np.float16))
+        del llm
+        self._evals[model_file] = (lp, lsms)
+        return self._evals[model_file]
+
+    def score(self, pair: dict, bands: dict | None = None) -> dict | None:
+        obs, perf = pair["observer"], pair["performer"]
+        key_o, key_p = self._family_key(obs), self._family_key(perf)
+        if key_o != key_p:
+            raise SystemExit(f"pair '{pair['name']}': observer/performer tokenize differently")
+        fam = self._tokenize_family(key_o, obs)
+        if fam is None:
+            return None
+        lp_obs, lsm_obs = self._eval(obs, fam)
+        lp_perf, lsm_perf = self._eval(perf, fam)
+
+        xent = np.full(fam["n"], np.nan, dtype=np.float32)
+        for (s0, first, clen), l_o, l_p in zip(fam["scored"], lsm_obs, lsm_perf):
+            p_obs = np.exp(l_o.astype(np.float32))
+            xc = -np.einsum("ij,ij->i", p_obs, l_p.astype(np.float32))
+            xent[s0 + first:s0 + clen] = xc[first - 1:]
+
+        tok_class = self._classes
+        valid = ~np.isnan(lp_obs) & fam["content"]
+        delta = lp_perf - lp_obs
+
+        d = delta[valid]
+        hot_thresh = float(np.quantile(d, 0.90))
+        hot_idx = np.where(valid & (delta > hot_thresh))[0]
+
+        scoreable = ~np.isnan(lp_obs)
+        by_class = {}
+        for cls in sorted(set(tok_class)):
+            m = scoreable & (tok_class == cls)
+            if m.sum() < 10:
+                continue
+            dc = delta[m]
+            by_class[cls] = {"n": int(m.sum()),
+                             "delta_mean": round(float(dc.mean()), 3),
+                             "delta_q90": round(float(np.quantile(dc, 0.9)), 3),
+                             "hot_share": round(float((dc > hot_thresh).mean()), 3),
+                             "logppl_perf": round(float(-lp_perf[m].mean()), 3)}
+
+        per_sent = []
+        for i, (line, s) in enumerate(fam["sents"]):
+            m = (fam["tok_sent"] == i) & valid
+            all_m = (fam["tok_sent"] == i) & scoreable
+            if m.sum() < 5 or m.sum() < 0.6 * all_m.sum():
+                continue
+            per_sent.append({
+                "i": i, "line": line, "text": s,
+                "b": float(-lp_perf[m].mean() / max(xent[m].mean(), 1e-6)),
+                "delta": float(delta[m].mean()),
+                "hot_share": float((delta[m] > hot_thresh).mean()),
+            })
+
+        doc = {
+            "b": round(float(-lp_perf[valid].mean() / max(xent[valid].mean(), 1e-6)), 4),
+            "delta_mean": round(float(d.mean()), 4),
+            "delta_q10": round(float(np.quantile(d, 0.10)), 4),
+            "delta_q50": round(float(np.quantile(d, 0.50)), 4),
+            "delta_q90": round(float(np.quantile(d, 0.90)), 4),
+            "hot_burstiness": round(_burstiness(hot_idx), 3),
+            "hot_max_window_share": round(_max_window_share(hot_idx, fam["n"]), 3),
+            "content_tokens": int(valid.sum()),
+        }
+        band = (bands or {}).get(pair["name"])
+        if band:
+            doc["b_band"] = band["b"]
+            doc["delta_band"] = band["delta"]
+            doc["b_flag"] = "below human band" if doc["b"] < band["b"][0] else "in band"
+            doc["delta_flag"] = ("above human band" if doc["delta_mean"] > band["delta"][2]
+                                 else "in band")
+        return {"pair": pair["name"], "axis": pair.get("axis", ""),
+                "token_classes": by_class, "doc": doc, "sentences": per_sent}
 
 
-def _burstiness(positions: np.ndarray, n: int) -> float:
-    """Gap burstiness of hot-token positions: -1 regular, 0 Poisson, +1 clustered."""
+def _burstiness(positions: np.ndarray) -> float:
     if len(positions) < 3:
         return 0.0
     gaps = np.diff(np.sort(positions))
@@ -168,96 +276,58 @@ def _max_window_share(positions: np.ndarray, n: int, w: int = HOT_WINDOW) -> flo
 
 
 def score_pair(path: Path, pair: dict) -> dict | None:
-    obs, perf = MODELS / pair["observer"], MODELS / pair["performer"]
-    doc = _doc_tokens(path, obs)
-    if doc is None:
-        return None
-    sents, text, tokens, tok_sent, tok_text, tok_span = doc
-    tok_class = np.asarray(_token_classes(text, tok_span))
+    return _DocScorer(path).score(pair, load_bands())
 
-    # plain-text tokenizer equality assertion (special tokens may differ)
-    from llama_cpp import Llama
-    probe = "We prove that the sampler converges; results follow."
-    t1 = Llama(model_path=str(obs), vocab_only=True, verbose=False).tokenize(probe.encode(), add_bos=False)
-    t2 = Llama(model_path=str(perf), vocab_only=True, verbose=False).tokenize(probe.encode(), add_bos=False)
-    if t1 != t2:
-        raise SystemExit(f"pair '{pair['name']}': observer/performer tokenize differently")
 
-    chunks = [tokens[i:i + N_CTX] for i in range(0, len(tokens), N_CTX)]
-    lp_obs, lsm_obs = _score(obs, chunks)
-    lp_perf_parts, xent_parts = [], []
-    from llama_cpp import Llama as _L
-    llm = _L(model_path=str(perf), n_ctx=N_CTX, n_gpu_layers=-1, logits_all=True, verbose=False)
-    for chunk, lsm1 in zip(chunks, lsm_obs):
-        llm.reset()
-        llm.eval(chunk)
-        logits = np.asarray(llm.scores[:len(chunk)], dtype=np.float32)[:-1]
-        lsm2 = _log_softmax(logits)
-        actual = np.asarray(chunk[1:])
-        lp = np.full(len(chunk), np.nan, dtype=np.float32)
-        lp[1:] = lsm2[np.arange(len(actual)), actual]
-        lp_perf_parts.append(lp)
-        p_obs = np.exp(lsm1.astype(np.float32))
-        xent_parts.append(np.concatenate([[np.nan], -np.einsum("ij,ij->i", p_obs, lsm2)]))
-    del llm
-    lp_perf = np.concatenate(lp_perf_parts)
-    xent = np.concatenate(xent_parts)
+def run_all(path: Path, only: str | None = None) -> list[dict]:
+    scorer = _DocScorer(path)
+    bands = load_bands()
+    return [r for p in load_pairs(only) if (r := scorer.score(p, bands))]
 
-    content = np.array([bool(re.search(r"[a-zA-Z]", t)) for t in tok_text])
-    valid = ~np.isnan(lp_obs) & content
-    delta = lp_perf - lp_obs
 
-    d = delta[valid]
-    hot_thresh = float(np.quantile(d, 0.90))
-    hot_idx = np.where(valid & (delta > hot_thresh))[0]
-    n = int(valid.sum())
+def consensus(results: list[dict], top: int = TOP_K) -> list[dict]:
+    """Cross-pair sentence aggregation: mean normalized B-rank + delta>0 votes."""
+    agg = {}
+    for r in results:
+        ranked = sorted(r["sentences"], key=lambda s: s["b"])
+        n = max(1, len(ranked) - 1)
+        for rank, s in enumerate(ranked):
+            a = agg.setdefault(s["i"], {"line": s["line"], "text": s["text"],
+                                        "ranks": [], "bs": [], "votes": 0})
+            a["ranks"].append(rank / n)
+            a["bs"].append(s["b"])
+            a["votes"] += s["delta"] > 0
+    rows = []
+    for a in agg.values():
+        rows.append({"line": a["line"], "text": a["text"],
+                     "mean_rank": sum(a["ranks"]) / len(a["ranks"]),
+                     "b_min": min(a["bs"]), "delta_votes": a["votes"],
+                     "n_pairs": len(a["ranks"])})
+    rows.sort(key=lambda r: r["mean_rank"])
+    return rows[:top]
 
-    per_sent = []
-    for i, (line, s) in enumerate(sents):
-        m = (tok_sent == i) & valid
-        all_m = (tok_sent == i) & ~np.isnan(lp_obs)
-        # mostly-symbol "sentences" are leaked math/markup, not prose
-        if m.sum() < 5 or m.sum() < 0.6 * all_m.sum():
-            continue
-        per_sent.append({
-            "i": i, "line": line, "text": s,
-            "b": float(-lp_perf[m].mean() / max(xent[m].mean(), 1e-6)),
-            "delta": float(delta[m].mean()),
-            "delta_q90": float(np.quantile(delta[m], 0.9)),
-            "hot_share": float((delta[m] > hot_thresh).mean()),
-        })
 
-    # score distribution by token class (all scoreable tokens, incl. punctuation)
-    scoreable = ~np.isnan(lp_obs)
-    by_class = {}
-    for cls in sorted(set(tok_class)):
-        m = scoreable & (tok_class == cls)
-        if m.sum() < 10:
-            continue
-        dc = delta[m]
-        by_class[cls] = {
-            "n": int(m.sum()),
-            "delta_mean": round(float(dc.mean()), 3),
-            "delta_q90": round(float(np.quantile(dc, 0.9)), 3),
-            "hot_share": round(float((dc > hot_thresh).mean()), 3),
-            "logppl_perf": round(float(-lp_perf[m].mean()), 3),
-        }
-
-    return {
-        "pair": pair["name"], "axis": pair.get("axis", ""),
-        "token_classes": by_class,
-        "doc": {
-            "b": round(float(-lp_perf[valid].mean() / max(xent[valid].mean(), 1e-6)), 4),
-            "delta_mean": round(float(d.mean()), 4),
-            "delta_q10": round(float(np.quantile(d, 0.10)), 4),
-            "delta_q50": round(float(np.quantile(d, 0.50)), 4),
-            "delta_q90": round(float(np.quantile(d, 0.90)), 4),
-            "hot_burstiness": round(_burstiness(hot_idx, n), 3),
-            "hot_max_window_share": round(_max_window_share(hot_idx, len(tokens)), 3),
-            "content_tokens": n,
-        },
-        "sentences": per_sent,
-    }
+def calibrate(paths: list[Path]) -> dict:
+    """Score a human corpus on every pair; store per-pair doc-level bands."""
+    from .baseline import collect_files
+    files = collect_files(paths)
+    if len(files) < 3:
+        raise SystemExit(f"need >=3 corpus files, got {len(files)}")
+    per_pair: dict[str, dict] = {}
+    for f in files:
+        scorer = _DocScorer(f)
+        for p in load_pairs():
+            r = scorer.score(p)
+            if r:
+                per_pair.setdefault(p["name"], {"b": [], "delta": []})
+                per_pair[p["name"]]["b"].append(r["doc"]["b"])
+                per_pair[p["name"]]["delta"].append(r["doc"]["delta_mean"])
+        print(f"  calibrated {f.name}")
+    q = lambda vs: [round(float(np.quantile(vs, p)), 4) for p in (0.05, 0.50, 0.95)]
+    bands = {name: {"b": q(v["b"]), "delta": q(v["delta"]), "n_docs": len(v["b"])}
+             for name, v in per_pair.items()}
+    BANDS_FILE.write_text(json.dumps(bands, indent=1) + "\n")
+    return bands
 
 
 def run(path: Path, pair_name: str | None = None) -> tuple[list[Finding], dict]:
@@ -267,12 +337,14 @@ def run(path: Path, pair_name: str | None = None) -> tuple[list[Finding], dict]:
     if res is None:
         return [], {}
     findings, doc = [], res["doc"]
+    band_note = f" ({doc['b_flag']})" if "b_flag" in doc else ""
     for rank, s in enumerate(sorted(res["sentences"], key=lambda x: x["b"])[:TOP_K]):
         findings.append(Finding(
             s["line"], (0, 0), "statistical", f"stat:{pair['name']}:machine_like",
             round(0.7 - 0.02 * rank, 2),
-            f"Most machine-like #{rank + 1} on {pair['name']} (B={s['b']:.3f}, doc {doc['b']:.3f}): "
-            f"rewrite in your own words; add a concrete fact or your phrasing.",
+            f"Most machine-like #{rank + 1} on {pair['name']} (B={s['b']:.3f}, "
+            f"doc {doc['b']:.3f}{band_note}): rewrite in your own words; add a "
+            f"concrete fact or your phrasing.",
             match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
     for rank, s in enumerate(sorted(res["sentences"], key=lambda x: -x["delta"])[:TOP_K]):
         findings.append(Finding(
@@ -284,7 +356,3 @@ def run(path: Path, pair_name: str | None = None) -> tuple[list[Finding], dict]:
     metrics = {f"stat_{k}": v for k, v in doc.items()}
     metrics["stat_pair"] = pair["name"]
     return findings, metrics
-
-
-def run_all(path: Path) -> list[dict]:
-    return [r for p in load_pairs() if (r := score_pair(path, p))]

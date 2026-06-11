@@ -49,7 +49,7 @@ Above all three: content genericity (paragraphs with no numbers/names/citations/
 deaiify report <file> [--profile NAME] [--stat] [--min-severity X] [--json]
 deaiify stat <file> [--pair NAME|all] [--classes] [--consensus] [--top N]
 deaiify baseline build --name NAME <files-or-dirs>
-deaiify stat calibrate <files-or-dirs>        # per-pair human bands, see below
+deaiify stat --calibrate <files-or-dirs>      # per-pair human bands, see below
 deaiify fix <file>                            # BANNED: warns and exits
 ```
 

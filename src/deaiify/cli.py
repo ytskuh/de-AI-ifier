@@ -55,61 +55,39 @@ def cmd_report(args) -> int:
 
 
 def cmd_fix(args) -> int:
-    from . import fixes
-    lex = lexical.run(args.file)
-    diff, n = fixes.apply(args.file, lex, write=args.write)
-    if not n:
-        print("no mechanically-fixable findings")
-        return 0
-    print(diff)
-    print(f"{n} fixes {'applied' if args.write else 'available (rerun with --write to apply)'}")
-    return 0
-
-
-def cmd_check(args) -> int:
-    from . import baseline
-    prof = baseline.load(args.profile)
-    merged, metrics = _all_findings(args.file, args.profile)
-    words = max(1, metrics.get("words", 1))
-    lex_warn = sum(1 for f in merged if f.layer == "lexical" and f.severity >= 0.6)
-    metrics["lexical_warn_per_1k"] = 1000 * lex_warn / words
-    structural_out = [f for f in merged if f.layer == "structural"]
-
-    failures = []
-    for key, (p05, p50, p95) in prof.get("metrics", {}).items():
-        v = metrics.get(key)
-        if v is None:
-            continue
-        ok = v <= p95 * 1.1 if "per_1k" in key else v >= p05 * 0.9
-        status = "ok" if ok else "FAIL"
-        print(f"  {status:4s} {key}: {v:.2f}  (baseline band [{p05:.2f}–{p95:.2f}])")
-        if not ok:
-            failures.append(key)
-    key_tells = [f for f in structural_out if f.payload.get("key_tell")]
-    status = "ok" if len(key_tells) == 0 else "FAIL"
-    print(f"  {status:4s} structural key-tell features out of band: {len(key_tells)} "
-          f"({len(structural_out)} total out of band)")
-    for f in structural_out:
-        print(f"       - {f.message}")
-    if key_tells:
-        failures.append("structural_key_tells")
-
-    print("PASS" if not failures else f"FAIL ({', '.join(failures)})")
-    return 0 if not failures else 1
+    print("deaiify fix is DISABLED: the mechanical fix engine produced unsafe edits "
+          "(multi-word collisions, part-of-speech swaps, comparative-context swaps) and is "
+          "banned until span-safety work lands — see the design doc. Use `deaiify report` "
+          "and edit the flagged spans yourself.", file=sys.stderr)
+    return 2
 
 
 def cmd_stat(args) -> int:
     from . import statistical
-    if args.pair and args.pair != "all":
-        results = [statistical.score_pair(args.file, statistical.load_pairs(args.pair)[0])]
-    else:
-        results = statistical.run_all(args.file)
+    if args.calibrate:
+        bands = statistical.calibrate(args.calibrate)
+        for name, b in bands.items():
+            print(f"  {name}: B band {b['b']}  Δ band {b['delta']}  (n={b['n_docs']})")
+        print(f"bands -> {statistical.BANDS_FILE}")
+        return 0
+    if args.file is None:
+        sys.exit("stat needs a file (or --calibrate <corpus>)")
+    results = statistical.run_all(args.file, None if args.pair == "all" else args.pair)
+    if args.consensus:
+        rows = statistical.consensus(results, top=args.top or 10)
+        print(f"consensus over {len(results)} pairs (low rank = machine-like on many axes; "
+              f"Δ votes = pairs leaning toward their vendor):")
+        for r in rows:
+            print(f"  L{r['line']:4d} rank={r['mean_rank']:.2f} Bmin={r['b_min']:.2f} "
+                  f"Δ>0 on {r['delta_votes']}/{r['n_pairs']}  {r['text'][:60]!r}")
+        return 0
     for r in results:
         if not r:
             continue
         d = r["doc"]
         print(f"[{r['pair']}] {r['axis']}")
-        print(f"  B={d['b']} (low=machine)  Δ mean={d['delta_mean']:+.3f} "
+        band = f"  [human band {d['b_band'][0]}–{d['b_band'][2]}: {d['b_flag']}]" if "b_band" in d else ""
+        print(f"  B={d['b']} (low=machine){band}  Δ mean={d['delta_mean']:+.3f} "
               f"q10/50/90={d['delta_q10']:+.3f}/{d['delta_q50']:+.3f}/{d['delta_q90']:+.3f}")
         print(f"  hot-token burstiness={d['hot_burstiness']:+.2f} (0=random, +1=clustered)  "
               f"max {statistical.HOT_WINDOW}-tok window share={d['hot_max_window_share']:.2f}  "
@@ -147,22 +125,21 @@ def main() -> None:
     rep.set_defaults(fn=cmd_report)
 
     st = sub.add_parser("stat", help="statistical scores (B + performer-tilt, per model pair)")
-    st.add_argument("file", type=Path)
+    st.add_argument("file", type=Path, nargs="?")
     st.add_argument("--pair", default="all", help="pair name from models/pairs.json (default: all)")
     st.add_argument("--top", type=int, default=3, help="top machine-like sentences per pair")
     st.add_argument("--classes", action="store_true",
                     help="show score distribution by token class (POS, transitions, punctuation)")
+    st.add_argument("--consensus", action="store_true",
+                    help="aggregate sentence rankings across all pairs")
+    st.add_argument("--calibrate", nargs="+", type=Path, metavar="CORPUS",
+                    help="score a human corpus on every pair and store per-pair bands")
     st.set_defaults(fn=cmd_stat)
 
-    fix = sub.add_parser("fix", help="apply unambiguous substitutions (diff preview)")
+    fix = sub.add_parser("fix", help="DISABLED pending precision work (see design doc)")
     fix.add_argument("file", type=Path)
-    fix.add_argument("--write", action="store_true", help="write changes to the file")
+    fix.add_argument("--write", action="store_true", help=argparse.SUPPRESS)
     fix.set_defaults(fn=cmd_fix)
-
-    chk = sub.add_parser("check", help="pass/fail vs a baseline profile")
-    chk.add_argument("file", type=Path)
-    chk.add_argument("--profile", required=True)
-    chk.set_defaults(fn=cmd_check)
 
     bl = sub.add_parser("baseline", help="manage baseline profiles")
     bls = bl.add_subparsers(dest="bcmd", required=True)
@@ -173,7 +150,7 @@ def main() -> None:
 
     args = ap.parse_args()
     _setup_hints()
-    if hasattr(args, "file") and not args.file.exists():
+    if getattr(args, "file", None) is not None and not args.file.exists():
         sys.exit(f"no such file: {args.file}")
     sys.exit(args.fn(args))
 

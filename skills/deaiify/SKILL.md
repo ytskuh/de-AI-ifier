@@ -24,18 +24,10 @@ band-based check. You (the agent) drive the judgment edits.
    With a profile, document-level `structural` findings appear (Biber feature rates
    outside the human band, worst first; `key_tell: true` = documented LLM habits).
 
-2. Apply safe mechanical fixes (single-word, meaning-preserving swaps only):
-
-   ```bash
-   uv run deaiify fix <article>           # preview unified diff
-   uv run deaiify fix <article> --write   # apply
-   ```
-
-3. Verify against the baseline; PASS is the stopping criterion:
-
-   ```bash
-   uv run deaiify check <article> --profile topical-arxiv
-   ```
+2. NOTE: `deaiify fix` is DISABLED (unsafe mechanical edits; see design doc) and
+   `check` was removed. The report IS the workflow: edit flagged spans by hand,
+   re-run report, stop when rates sit inside the bands and no consensus
+   statistical outliers remain.
 
    New profiles: `uv run deaiify baseline build --name <tag> <files-or-dirs>`
    (collect corpora systematically — see tools/collect_topical_baseline.py — never
