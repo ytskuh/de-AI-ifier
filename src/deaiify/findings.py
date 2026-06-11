@@ -50,8 +50,9 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
     line_level = [f for f in findings if f.line > 0]
 
     if doc_level:
-        con.print("[bold]Document-level[/] (whole-text rates and scores, not occurrence counts):")
-        for f in sorted(doc_level, key=lambda f: -f.severity):
+        con.print("[bold]Document-level[/] (whole-text rates and scores, not occurrence counts; "
+                  "sorted by deviation — below band matters as much as above):")
+        for f in sorted(doc_level, key=lambda f: -f.payload.get("excess", f.severity)):
             con.print(f"  • {f.message}", style=sev(f.severity))
         con.print()
 

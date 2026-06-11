@@ -95,9 +95,10 @@ def run(path: Path, profile: dict) -> list[Finding]:
         if v is None or p05 <= v <= p95:
             continue
         width = max(p95 - p05, 1e-9)
+        # direction-free outlier magnitude: below-band is as diagnostic as above
         excess = (p05 - v if v < p05 else v - p95) / width
         key = any(k in col for k in KEY_TELLS)
-        sev = min(0.45 + 0.2 * excess + (0.2 if key else 0.0), 0.85)
+        sev = min(0.6 + 0.2 * excess + (0.1 if key else 0.0), 0.95)
         side = "below" if v < p05 else "above"
         gloss, hint = FEATURE_INFO.get(col, (col.split("_", 2)[-1].replace("_", " "), ""))
         msg = (f"{gloss}: {v:.1f}/1k, {side} the human band [{p05:.1f}–{p95:.1f}] "
@@ -106,6 +107,6 @@ def run(path: Path, profile: dict) -> list[Finding]:
             msg += f" Edit: {hint}."
         flagged.append((excess, Finding(
             0, (0, 0), "structural", f"biber:{col}", round(sev, 2), msg,
-            payload={"value": v, "band": band, "key_tell": key})))
+            payload={"value": v, "band": band, "key_tell": key, "excess": round(excess, 2)})))
     flagged.sort(key=lambda t: -t[0])
     return [f for _, f in flagged[:MAX_FINDINGS]]
