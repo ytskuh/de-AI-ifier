@@ -75,9 +75,9 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
                         p["hint"] or "—", style=sev(f.severity))
         con.print(tbl)
     if seg:
-        n_seg = len(seg[0].payload["residuals"])
-        st = Table(title=f"Within-document unevenness ({n_seg} segments; map: "
-                         f"↑ above / · normal / ↓ below the document's own rate)")
+        n_seg = len(seg[0].payload["map"])
+        st = Table(title=f"Segments vs HUMAN segment band ({n_seg} segments; map: "
+                         f"↑ above / · in band / ↓ below the profile's 1k-segment band)")
         st.add_column("feature", overflow="fold", max_width=30)
         st.add_column("p", justify="right")
         st.add_column("rate/1k", justify="right")
@@ -86,7 +86,7 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
         st.add_column("worst segments", overflow="fold")
         for f in seg:
             p = f.payload
-            st.add_row(p["gloss_seg"], f"{p['p']:.3f}", f"{p['doc_rate']:.1f}",
+            st.add_row(p["gloss_seg"], f"{p['p']:.4f}", f"{p['doc_rate']:.1f}",
                        "in" if p["in_band"] else "out", p["map"],
                        "; ".join(p["outliers"]), style=sev(f.severity))
         con.print(st)

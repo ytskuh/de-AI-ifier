@@ -170,9 +170,8 @@ def biber_features(docs: list[tuple[str, str]], normalize: bool = True):
 
 SEGMENT_WORDS = 1000
 MIN_SEGMENTS = 4
-HET_BOOT = 999
-HET_FDR_Q = 0.10
-MIN_FEATURE_COUNT = 10
+SEG_FDR_Q = 0.10
+SEG_NULL_RATE = 0.10  # by construction ~10% of human segments fall outside [p5,p95]
 
 
 def _segments(path: Path) -> list[dict]:
@@ -194,24 +193,17 @@ def _segments(path: Path) -> list[dict]:
     return segs
 
 
-def _heterogeneity(counts: "np.ndarray", weights: "np.ndarray", rng) -> tuple[float, "np.ndarray"]:
-    """Max-|Pearson residual| test of multinomial homogeneity, bootstrap p-value."""
-    import numpy as np
-    n = int(counts.sum())
-    expected = n * weights
-    resid = (counts - expected) / np.sqrt(expected)
-    stat = float(np.abs(resid).max())
-    sims = rng.multinomial(n, weights, size=HET_BOOT)
-    sim_stat = np.abs((sims - expected) / np.sqrt(expected)).max(axis=1)
-    p = float((1 + (sim_stat >= stat).sum()) / (HET_BOOT + 1))
-    return p, resid
+def _binom_tail(k: int, n: int, p: float) -> float:
+    """Exact P(X >= k) for X ~ Binomial(n, p)."""
+    from math import comb
+    return float(sum(comb(n, i) * p**i * (1 - p)**(n - i) for i in range(k, n + 1)))
 
 
 def _bh_select(pvals: list[tuple[str, float]], q: float) -> set[str]:
     """Benjamini-Hochberg: names whose p-value passes FDR level q."""
     m = len(pvals)
     ordered = sorted(pvals, key=lambda t: t[1])
-    keep, thresh_rank = set(), 0
+    thresh_rank = 0
     for rank, (_, p) in enumerate(ordered, 1):
         if p <= q * rank / m:
             thresh_rank = rank
@@ -219,58 +211,64 @@ def _bh_select(pvals: list[tuple[str, float]], q: float) -> set[str]:
 
 
 def segment_findings(path: Path, profile: dict) -> list[Finding]:
-    """Within-document heterogeneity per feature (design: segmented analysis)."""
-    import numpy as np
-
+    """Segments vs the PROFILE's segment-granularity bands (design: segmented
+    analysis). The reference for abnormal is human writing, never the document
+    itself; binomial tail + BH control the 67-feature multiplicity."""
+    seg_bands = profile.get("features_seg")
+    if not seg_bands:
+        return []
     segs = _segments(path)
     if len(segs) < MIN_SEGMENTS:
         return []
-    counts_df = biber_features(
-        [(f"seg{i:03d}", s["text"]) for i, s in enumerate(segs)], normalize=False)
-    counts_df = counts_df.sort("doc_id")
-    weights = np.array([s["words"] for s in segs], dtype=float)
-    weights /= weights.sum()
-    rng = np.random.default_rng(0)
+    rates_df = biber_features(
+        [(f"seg{i:03d}", s["text"]) for i, s in enumerate(segs)]).sort("doc_id")
+    total_words = sum(s["words"] for s in segs)
 
     tested = {}
-    for col in counts_df.columns:
-        if col == "doc_id" or col in ("f_43_type_token", "f_44_mean_word_length"):
-            continue  # not counts
-        counts = counts_df[col].to_numpy().astype(float)
-        if counts.sum() < MIN_FEATURE_COUNT:
+    for col, band in seg_bands.items():
+        if col in ("f_43_type_token", "f_44_mean_word_length"):
+            continue  # not rates
+        p05, _, p95 = band
+        rates = rates_df[col].to_numpy()
+        side = [(1 if r > p95 else (-1 if r < p05 else 0)) for r in rates]
+        k = sum(1 for s in side if s != 0)
+        if k == 0:
             continue
-        p, resid = _heterogeneity(counts, weights, rng)
-        tested[col] = (p, resid, counts)
+        tested[col] = (_binom_tail(k, len(segs), SEG_NULL_RATE), side, rates)
     if not tested:
         return []
-    selected = _bh_select([(c, v[0]) for c, v in tested.items()], HET_FDR_Q)
+    selected = _bh_select([(c_, v[0]) for c_, v in tested.items()], SEG_FDR_Q)
 
     findings = []
     for col in selected:
-        p, resid, counts = tested[col]
+        p, side, rates = tested[col]
+        band = seg_bands[col]
         gloss = FEATURE_INFO.get(col, (col.split("_", 2)[-1].replace("_", " "), "", ""))[0]
-        doc_rate = 1000 * counts.sum() / sum(s["words"] for s in segs)
-        band = profile["features"].get(col)
-        in_band = band and band[0] <= doc_rate <= band[2]
+        doc_band = profile["features"].get(col, band)
+        doc_rate = float(sum(r * s["words"] for r, s in zip(rates, segs)) / total_words)
+        in_band = doc_band[0] <= doc_rate <= doc_band[2]
+        seg_map = "".join("↑" if s > 0 else ("↓" if s < 0 else "·") for s in side)
         outliers = []
-        for i in np.argsort(-np.abs(resid)):
-            if abs(resid[i]) < 2 or len(outliers) >= 3:
-                break
+        order = sorted(range(len(segs)), key=lambda i: -abs(rates[i] - band[1]))
+        for i in order:
+            if side[i] == 0 or len(outliers) >= 3:
+                continue
             seg = segs[i]
-            arrow = "↑" if resid[i] > 0 else "↓"
-            rate = 1000 * counts[i] / seg["words"]
-            outliers.append(f"L{seg['start']}–{seg['end']} {arrow}{abs(resid[i]):.1f}σ "
-                            f"({rate:.1f}/1k)")
-        hidden = " — document-level rate is IN band; the imbalance is invisible without segmentation" if in_band else ""
-        sev = min(0.6 + 0.05 * float(np.abs(resid).max()), 0.9)
-        seg_map = "".join("↑" if r > 2 else ("↓" if r < -2 else "·") for r in resid)
+            arrow = "↑" if side[i] > 0 else "↓"
+            outliers.append(f"L{seg['start']}–{seg['end']} {arrow} {rates[i]:.1f}/1k")
+        hidden = (" — document-level rate is IN band; the local deviations are invisible "
+                  "without segmentation") if in_band else ""
+        n_out = sum(1 for s in side if s != 0)
+        sev = min(0.6 + 0.05 * n_out, 0.9)
         findings.append(Finding(
             0, (0, 0), "structural", f"biber-seg:{col}", round(sev, 2),
-            f"{gloss}: uneven across the document (q<{HET_FDR_Q}, p={p:.3f}); "
-            f"doc rate {doc_rate:.1f}/1k; outlier segments: {'; '.join(outliers)}{hidden}.",
+            f"{gloss}: {n_out}/{len(segs)} segments outside the human segment band "
+            f"[{band[0]:.1f}–{band[2]:.1f}] (binomial p={p:.4f}); doc rate "
+            f"{doc_rate:.1f}/1k; worst: {'; '.join(outliers)}{hidden}.",
             payload={"p": p, "doc_rate": round(doc_rate, 2), "in_band": bool(in_band),
                      "gloss_seg": gloss, "map": seg_map, "outliers": outliers,
-                     "residuals": [round(float(r), 2) for r in resid]}))
+                     "band": [round(band[0], 2), round(band[2], 2)],
+                     "n_out": n_out}))
     findings.sort(key=lambda f: f.payload["p"])
     return findings
 

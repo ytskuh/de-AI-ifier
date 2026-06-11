@@ -112,31 +112,20 @@ class LatexExtractionRegression(unittest.TestCase):
 
 
 
-class SegmentHeterogeneityInvariants(unittest.TestCase):
-    """Statistical core of segmented structural analysis: homogeneous counts
-    must not flag; planted imbalance must flag (design: segmented analysis)."""
+class SegmentBandInvariants(unittest.TestCase):
+    """Segment analysis references the PROFILE band, with binomial multiplicity
+    control (user correction 2026-06-11: human band, not the document's own
+    rate; single out-of-band cells are chance at ~10%)."""
 
-    def test_homogeneous_not_flagged_planted_flagged(self):
-        import numpy as np
-        from deaiify import structural
-        rng = np.random.default_rng(7)
-        weights = np.full(10, 0.1)
-        homog = rng.multinomial(200, weights).astype(float)
-        p_h, _ = structural._heterogeneity(homog, weights, np.random.default_rng(1))
-        planted = np.full(10, 10.0); planted[3] = 110.0  # one segment 11x the rest
-        p_p, resid = structural._heterogeneity(planted, weights, np.random.default_rng(1))
-        self.assertGreater(p_h, 0.05)
-        self.assertLess(p_p, 0.01)
-        self.assertEqual(int(np.argmax(np.abs(resid))), 3)
-
-    def test_bh_select(self):
-        from deaiify.structural import _bh_select
-        pvals = [("a", 0.001), ("b", 0.04), ("c", 0.9)]
-        sel = _bh_select(pvals, 0.10)
-        self.assertIn("a", sel)
-        self.assertNotIn("c", sel)
-
-
+    def test_binomial_tail_and_selection(self):
+        from deaiify.structural import _binom_tail, _bh_select
+        # 1 of 12 segments outside band: chance (p ~ 0.72) — must not flag
+        self.assertGreater(_binom_tail(1, 12, 0.10), 0.5)
+        # 6 of 12 outside: far beyond chance — must flag
+        self.assertLess(_binom_tail(6, 12, 0.10), 0.001)
+        sel = _bh_select([("chance", _binom_tail(1, 12, 0.10)),
+                          ("real", _binom_tail(6, 12, 0.10))], 0.10)
+        self.assertEqual(sel, {"real"})
 
 
 class UnitMergingInvariants(unittest.TestCase):
