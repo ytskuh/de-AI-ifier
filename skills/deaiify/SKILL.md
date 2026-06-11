@@ -5,8 +5,8 @@ description: Localize and fix AI-writing tells in an article (markdown, plain te
 
 # deaiify — polish LLM-drafted articles
 
-Stages 1–2: ranked detection report, baseline profiles, mechanical fixes,
-band-based check. You (the agent) drive the judgment edits.
+Ranked detection report + baseline profiles + statistical sentence ranking.
+You (the agent) drive the judgment edits; the human rewrites statistical findings.
 
 ## Workflow
 
@@ -33,7 +33,7 @@ band-based check. You (the agent) drive the judgment edits.
    (collect corpora systematically — see tools/collect_topical_baseline.py — never
    by hand-picking documents you "know").
 
-4. Triage remaining findings, highest severity first:
+3. Triage remaining findings, highest severity first:
    - **lexical** (rules from `ai-tells.*`, `Deslop.*`, `Deaiify.*`): rewrite the flagged
      span. Substitution rules carry the replacement in the message. Edit span-by-span —
      NEVER paste whole paragraphs into an LLM with "humanize this"; that re-introduces
@@ -42,20 +42,20 @@ band-based check. You (the agent) drive the judgment edits.
      construction, spread across the document — e.g. gerunds above band → recast some
      "-ing" clauses as finite verbs; that-complements below band → restore a few
      "We show that…" constructions; first-person below band → use "we" where natural.
-     Re-run `check` after a handful of edits; do not chase the median.
+     Re-run `report` after a handful of edits; do not chase the median.
    - **uniformity** (document-level): vary sentence/paragraph lengths — split a long
      sentence, fuse two short ones. Do not rephrase content while doing this.
    - **genericity**: these need a real fact, number, citation, or example from the
      author. Collect them and ASK THE USER rather than inventing specifics.
 
-5. Rewrite constraints (apply to every edit):
+4. Rewrite constraints (apply to every edit):
    - Facts, numbers, citations, and math are immutable tokens.
    - Prefer deletion over substitution for filler ("It is worth noting that…" → delete).
    - Match the surrounding register; do not add adjectives or new claims.
    - Suggestion-level vocabulary hits ("Kobak", "SlopWords") are advisory: rewrite only
      when several cluster in one paragraph.
 
-4. Re-run the report. Target: falling findings/1k and no remaining warnings/errors.
+5. Re-run the report. Target: falling findings/1k and no remaining warnings/errors.
    Don't chase zero suggestions — over-stripping flattens voice, which is itself a tell.
 
 ## Statistical layer (Stage 3)
@@ -81,7 +81,7 @@ facts, numbers, and idiosyncratic phrasing are what raise B.
 
 ## Known limits
 
-- A clean report + passing check does NOT mean undetectable; the statistical layer
+- A clean report does NOT mean undetectable; the statistical layer
   is a ranking, not a calibrated verdict (thresholds don't transfer across pairs).
 - Findings on the author's own phrasing happen (e.g. formal transitions in academic
   prose). When the user says a flagged phrase is their genuine style, leave it.
