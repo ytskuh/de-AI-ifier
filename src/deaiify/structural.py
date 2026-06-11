@@ -241,22 +241,31 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
     total_words = sum(s["words"] for s in segs)
 
     tested = {}
+    n_human = len(seg_data["tokens"])
+    floor = 2.0 / (n_human + 1)
     for col, counts in seg_data["counts"].items():
         human_rates = 1000.0 * np.asarray(counts, dtype=float) / human_tokens
         p05, p95 = float(np.quantile(human_rates, 0.05)), float(np.quantile(human_rates, 0.95))
+        hmin, hmax = float(human_rates.min()), float(human_rates.max())
+        span = max(hmax - hmin, 1e-9)
         rates = rates_df[col].to_numpy()
         seg_p = np.array([_empirical_two_sided_p(r, human_rates) for r in rates])
         side = [(1 if r > p95 else (-1 if r < p05 else 0)) for r in rates]
         if not any(side):
             continue
-        tested[col] = (float(seg_p.min()), seg_p, side, rates, (p05, p95))
+        # tiebreak among floor-tied features: distance beyond the human
+        # extremes, in units of the human range
+        beyond = float(max(max((r - hmax) / span for r in rates),
+                           max((hmin - r) / span for r in rates), 0.0))
+        tested[col] = (float(seg_p.min()), seg_p, side, rates, (p05, p95), beyond)
     if not tested:
         return []
     selected = _bh_select([(c_, v[0]) for c_, v in tested.items()], SEG_FDR_Q)
 
     findings = []
     for col in selected:
-        p_min, seg_p, side, rates, (p05, p95) = tested[col]
+        p_min, seg_p, side, rates, (p05, p95), beyond = tested[col]
+        at_floor = p_min <= floor + 1e-12
         gloss = FEATURE_INFO.get(col, (col.split("_", 2)[-1].replace("_", " "), "", ""))[0]
         doc_rate = float(sum(r * s["words"] for r, s in zip(rates, segs)) / total_words)
         band = profile["features"].get(col)
@@ -279,10 +288,11 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
             f"independence assumed); {n_out}/{len(segs)} segments outside the human "
             f"segment range [{p05:.1f}–{p95:.1f}]; doc rate {doc_rate:.1f}/1k; "
             f"worst: {'; '.join(outliers)}{hidden}.",
-            payload={"p": p_min, "doc_rate": round(doc_rate, 2), "in_band": in_band,
+            payload={"p": p_min, "at_floor": at_floor, "beyond": round(beyond, 2),
+                     "doc_rate": round(doc_rate, 2), "in_band": in_band,
                      "gloss_seg": gloss, "map": seg_map, "outliers": outliers,
                      "band": [round(p05, 2), round(p95, 2)], "n_out": n_out}))
-    findings.sort(key=lambda f: f.payload["p"])
+    findings.sort(key=lambda f: (f.payload["p"], -f.payload["beyond"]))
     return findings
 
 

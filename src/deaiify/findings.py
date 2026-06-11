@@ -86,7 +86,8 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
         st.add_column("worst segments", overflow="fold")
         for f in seg:
             p = f.payload
-            st.add_row(p["gloss_seg"], f"{p['p']:.4f}", f"{p['doc_rate']:.1f}",
+            p_str = f"≤{p['p']:.4f}" if p.get("at_floor") else f"{p['p']:.4f}"
+            st.add_row(p["gloss_seg"], p_str, f"{p['doc_rate']:.1f}",
                        "in" if p["in_band"] else "out", p["map"],
                        "; ".join(p["outliers"]), style=sev(f.severity))
         con.print(st)
