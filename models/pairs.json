@@ -1,0 +1,32 @@
+[
+  {
+    "name": "llama31-rlhf",
+    "axis": "generic RLHF (Llama 3.1 family)",
+    "observer": "llama3.1-8b-base.Q8_0.gguf",
+    "performer": "llama3.1-8b-instruct.Q8_0.gguf"
+  },
+  {
+    "name": "qwen35-rlhf",
+    "axis": "generic RLHF (Qwen3.5 family)",
+    "observer": "qwen3.5-9b-base.Q8_0.gguf",
+    "performer": "qwen3.5-9b-stock-instruct.Q8_0.gguf"
+  },
+  {
+    "name": "qwen35-claude46",
+    "axis": "Claude 4.6 Opus distill (Jackrong, on Qwen3.5-9B)",
+    "observer": "qwen3.5-9b-base.Q8_0.gguf",
+    "performer": "qwen3.5-9b-claude46-distill.Q8_0.gguf"
+  },
+  {
+    "name": "gpt5chat-gad",
+    "axis": "GPT-5-Chat via adversarial distill (ytz20 GAD)",
+    "observer": "llama3.1-8b-base.Q8_0.gguf",
+    "performer": "llama3.1-8b-gpt5chat-gad.Q8_0.gguf"
+  },
+  {
+    "name": "gpt5chat-sft",
+    "axis": "GPT-5-Chat via 160k-sample SFT (Jackrong)",
+    "observer": "llama3.1-8b-base.Q8_0.gguf",
+    "performer": "llama3.1-8b-gpt5chat-sft.Q8_0.gguf"
+  }
+]

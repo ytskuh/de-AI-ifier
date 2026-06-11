@@ -1,0 +1,16 @@
+# toolchain artifacts
+bin/
+.codegraph/
+.vale-styles/
+.venv/
+.claude/
+__pycache__/
+
+# model weights (download per README; the pair registry IS versioned)
+models/*
+!models/pairs.json
+
+# personal source material and derived corpora — populate locally, see README
+# (sources live in data/personal/, articles under polish in data/targets/)
+data/
+profiles/personal.json
