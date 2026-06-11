@@ -715,5 +715,8 @@
    34.939,
    43.043
   ]
- }
+ },
+ "corpus_paths": [
+  "data/baseline/topical/latex"
+ ]
 }

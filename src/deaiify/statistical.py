@@ -337,16 +337,20 @@ def consensus(results: list[dict], top: int = TOP_K) -> list[dict]:
     return rows[:top]
 
 
-def calibrate(paths: list[Path]) -> dict:
-    """Score a human corpus on every pair; store per-pair doc-level bands."""
+def calibrate(paths: list[Path], only_pairs: list[str] | None = None) -> dict:
+    """Score a human corpus and store per-pair bands, merging into the existing
+    bands file so a newly added pair can be calibrated alone."""
     from .baseline import collect_files
     files = collect_files(paths)
     if len(files) < 3:
         raise SystemExit(f"need >=3 corpus files, got {len(files)}")
+    pairs = load_pairs()
+    if only_pairs:
+        pairs = [p for p in pairs if p["name"] in only_pairs]
     per_pair: dict[str, dict] = {}
     for f in files:
         scorer = _DocScorer(f)
-        for p in load_pairs():
+        for p in pairs:
             r = scorer.score(p)
             if r:
                 d = per_pair.setdefault(p["name"], {"b": [], "delta": [],
@@ -357,19 +361,28 @@ def calibrate(paths: list[Path]) -> dict:
                 d["sd"] += [s["delta"] for s in r["sentences"]]
         print(f"  calibrated {f.name}")
     q = lambda vs, ps: [round(float(np.quantile(vs, p)), 4) for p in ps]
-    bands = {name: {"b": q(v["b"], (0.05, 0.50, 0.95)),
-                    "delta": q(v["delta"], (0.05, 0.50, 0.95)),
-                    "sent_b": q(v["sb"], (0.01, 0.05, 0.50)),
-                    "sent_delta": q(v["sd"], (0.50, 0.95, 0.99)),
-                    "n_docs": len(v["b"]), "n_sentences": len(v["sb"])}
-             for name, v in per_pair.items()}
+    bands = load_bands()
+    bands.update({name: {"b": q(v["b"], (0.05, 0.50, 0.95)),
+                         "delta": q(v["delta"], (0.05, 0.50, 0.95)),
+                         "sent_b": q(v["sb"], (0.01, 0.05, 0.50)),
+                         "sent_delta": q(v["sd"], (0.50, 0.95, 0.99)),
+                         "n_docs": len(v["b"]), "n_sentences": len(v["sb"])}
+                  for name, v in per_pair.items()})
     BANDS_FILE.write_text(json.dumps(bands, indent=1) + "\n")
     return bands
 
 
-def run(path: Path, pair_name: str | None = None) -> tuple[list[Finding], dict]:
-    """Findings from the first available (or named) pair — used by report --stat."""
+def run(path: Path, pair_name: str | None = None,
+        corpus_paths: list | None = None) -> tuple[list[Finding], dict]:
+    """Findings from the first available (or named) pair — used by report --stat.
+    Auto-calibrates the pair against the profile's corpus when bands are missing."""
+    import sys
     pair = load_pairs(pair_name)[0]
+    if corpus_paths and "sent_b" not in load_bands().get(pair["name"], {}):
+        print(f"[stat] pair '{pair['name']}' is uncalibrated — calibrating against the "
+              f"profile corpus ({len(corpus_paths)} path(s)); one-time, takes minutes",
+              file=sys.stderr)
+        calibrate([Path(p) for p in corpus_paths], only_pairs=[pair["name"]])
     res = score_pair(path, pair)
     if res is None:
         return [], {}

@@ -73,6 +73,7 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
     return {"name": name, "language": "en", "n_docs": len(docs),
             "docs": [d for d, _ in docs], "features": features,
             "features_seg": features_seg, "n_segments": len(seg_docs),
+            "corpus_paths": [str(p) for p in paths],
             "metrics": metric_bands}
 
 

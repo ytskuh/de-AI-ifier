@@ -35,7 +35,11 @@ def _all_findings(path: Path, profile_name: str | None, with_stat: bool = False)
         extra = structural.run(path, baseline.load(profile_name))
     if with_stat:
         from . import statistical
-        sfind, smetrics = statistical.run(path)
+        corpus = None
+        if profile_name:
+            from . import baseline
+            corpus = baseline.load(profile_name).get("corpus_paths")
+        sfind, smetrics = statistical.run(path, corpus_paths=corpus)
         extra += sfind
         metrics.update(smetrics)
     return F.merge(lex + heur + extra), metrics
