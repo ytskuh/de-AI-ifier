@@ -156,15 +156,121 @@ def prose(path: Path) -> str:
     return "\n\n".join(text for _, text in paragraphs(path))
 
 
-def biber_features(docs: list[tuple[str, str]]):
-    """docs: (doc_id, prose_text) -> polars DataFrame, one row per doc, per-1k rates."""
+def biber_features(docs: list[tuple[str, str]], normalize: bool = True):
+    """docs: (doc_id, prose_text) -> polars DataFrame, one row per doc.
+    normalize=True gives per-1k rates; False gives raw counts."""
     import polars as pl
     from pybiber import CorpusProcessor
 
     corp = pl.DataFrame({"doc_id": [d for d, _ in docs], "text": [t for _, t in docs]})
     tokens = CorpusProcessor().process_corpus(corp, _nlp())
     from pybiber import biber
-    return biber(tokens)
+    return biber(tokens, normalize=normalize)
+
+
+SEGMENT_WORDS = 1000
+MIN_SEGMENTS = 4
+HET_BOOT = 999
+HET_FDR_Q = 0.10
+MIN_FEATURE_COUNT = 10
+
+
+def _segments(path: Path) -> list[dict]:
+    """Paragraphs accumulated into ~SEGMENT_WORDS-word segments with line ranges."""
+    segs, cur, words, start = [], [], 0, None
+    for line, text in paragraphs(path):
+        if start is None:
+            start = line
+        cur.append(text)
+        words += len(text.split())
+        if words >= SEGMENT_WORDS:
+            segs.append({"start": start, "end": line, "text": "\n\n".join(cur), "words": words})
+            cur, words, start = [], 0, None
+    if cur and segs and words < SEGMENT_WORDS // 2:
+        segs[-1]["text"] += "\n\n" + "\n\n".join(cur)
+        segs[-1]["words"] += words
+    elif cur:
+        segs.append({"start": start, "end": start, "text": "\n\n".join(cur), "words": words})
+    return segs
+
+
+def _heterogeneity(counts: "np.ndarray", weights: "np.ndarray", rng) -> tuple[float, "np.ndarray"]:
+    """Max-|Pearson residual| test of multinomial homogeneity, bootstrap p-value."""
+    import numpy as np
+    n = int(counts.sum())
+    expected = n * weights
+    resid = (counts - expected) / np.sqrt(expected)
+    stat = float(np.abs(resid).max())
+    sims = rng.multinomial(n, weights, size=HET_BOOT)
+    sim_stat = np.abs((sims - expected) / np.sqrt(expected)).max(axis=1)
+    p = float((1 + (sim_stat >= stat).sum()) / (HET_BOOT + 1))
+    return p, resid
+
+
+def _bh_select(pvals: list[tuple[str, float]], q: float) -> set[str]:
+    """Benjamini-Hochberg: names whose p-value passes FDR level q."""
+    m = len(pvals)
+    ordered = sorted(pvals, key=lambda t: t[1])
+    keep, thresh_rank = set(), 0
+    for rank, (_, p) in enumerate(ordered, 1):
+        if p <= q * rank / m:
+            thresh_rank = rank
+    return {name for name, _ in ordered[:thresh_rank]}
+
+
+def segment_findings(path: Path, profile: dict) -> list[Finding]:
+    """Within-document heterogeneity per feature (design: segmented analysis)."""
+    import numpy as np
+
+    segs = _segments(path)
+    if len(segs) < MIN_SEGMENTS:
+        return []
+    counts_df = biber_features(
+        [(f"seg{i:03d}", s["text"]) for i, s in enumerate(segs)], normalize=False)
+    counts_df = counts_df.sort("doc_id")
+    weights = np.array([s["words"] for s in segs], dtype=float)
+    weights /= weights.sum()
+    rng = np.random.default_rng(0)
+
+    tested = {}
+    for col in counts_df.columns:
+        if col == "doc_id" or col in ("f_43_type_token", "f_44_mean_word_length"):
+            continue  # not counts
+        counts = counts_df[col].to_numpy().astype(float)
+        if counts.sum() < MIN_FEATURE_COUNT:
+            continue
+        p, resid = _heterogeneity(counts, weights, rng)
+        tested[col] = (p, resid, counts)
+    if not tested:
+        return []
+    selected = _bh_select([(c, v[0]) for c, v in tested.items()], HET_FDR_Q)
+
+    findings = []
+    for col in selected:
+        p, resid, counts = tested[col]
+        gloss = FEATURE_INFO.get(col, (col.split("_", 2)[-1].replace("_", " "), "", ""))[0]
+        doc_rate = 1000 * counts.sum() / sum(s["words"] for s in segs)
+        band = profile["features"].get(col)
+        in_band = band and band[0] <= doc_rate <= band[2]
+        outliers = []
+        for i in np.argsort(-np.abs(resid)):
+            if abs(resid[i]) < 2 or len(outliers) >= 3:
+                break
+            seg = segs[i]
+            arrow = "↑" if resid[i] > 0 else "↓"
+            rate = 1000 * counts[i] / seg["words"]
+            outliers.append(f"L{seg['start']}–{seg['end']} {arrow}{abs(resid[i]):.1f}σ "
+                            f"({rate:.1f}/1k)")
+        hidden = " — document-level rate is IN band; the imbalance is invisible without segmentation" if in_band else ""
+        sev = min(0.6 + 0.05 * float(np.abs(resid).max()), 0.9)
+        findings.append(Finding(
+            0, (0, 0), "structural", f"biber-seg:{col}", round(sev, 2),
+            f"{gloss}: uneven across the document (q<{HET_FDR_Q}, p={p:.3f}); "
+            f"doc rate {doc_rate:.1f}/1k; outlier segments: {'; '.join(outliers)}{hidden}.",
+            payload={"p": p, "doc_rate": round(doc_rate, 2), "in_band": bool(in_band),
+                     "residuals": [round(float(r), 2) for r in resid]}))
+    findings.sort(key=lambda f: f.payload["p"])
+    return findings
 
 
 def run(path: Path, profile: dict) -> list[Finding]:
@@ -192,4 +298,6 @@ def run(path: Path, profile: dict) -> list[Finding]:
             payload={"value": v, "band": band, "key_tell": key, "excess": round(excess, 2),
                      "gloss": gloss, "arrow": arrow, "hint": hint})))
     flagged.sort(key=lambda t: -t[0])
-    return [f for _, f in flagged[:MAX_FINDINGS]]
+    out = [f for _, f in flagged[:MAX_FINDINGS]]
+    out += segment_findings(path, profile)
+    return out

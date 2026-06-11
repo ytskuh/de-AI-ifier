@@ -135,6 +135,12 @@ window of a rare feature would constantly over-flag on raw deviation).
   baseline band edges (P < 0.05 against the p5/p95 rate as null) are annotated;
   this respects both between-document variance (the band) and within-segment
   sampling noise (the Poisson tail), instead of comparing raw rates to the band.
+- **Interpretation caveat (by design)**: sections of any real paper differ
+  grammatically (proofs vs introduction), so heterogeneity locates register
+  shifts; it does not by itself prove mixed authorship. Future extension:
+  calibrate heterogeneity against the human corpus (distribution of per-feature
+  max-residuals across the baseline papers) so findings read "more uneven than
+  human papers of this register", mirroring the band philosophy.
 
 ## Corpora and profiles
 

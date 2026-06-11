@@ -110,5 +110,32 @@ class LatexExtractionRegression(unittest.TestCase):
                          "uses bold and anchors")
 
 
+
+
+class SegmentHeterogeneityInvariants(unittest.TestCase):
+    """Statistical core of segmented structural analysis: homogeneous counts
+    must not flag; planted imbalance must flag (design: segmented analysis)."""
+
+    def test_homogeneous_not_flagged_planted_flagged(self):
+        import numpy as np
+        from deaiify import structural
+        rng = np.random.default_rng(7)
+        weights = np.full(10, 0.1)
+        homog = rng.multinomial(200, weights).astype(float)
+        p_h, _ = structural._heterogeneity(homog, weights, np.random.default_rng(1))
+        planted = np.full(10, 10.0); planted[3] = 110.0  # one segment 11x the rest
+        p_p, resid = structural._heterogeneity(planted, weights, np.random.default_rng(1))
+        self.assertGreater(p_h, 0.05)
+        self.assertLess(p_p, 0.01)
+        self.assertEqual(int(np.argmax(np.abs(resid))), 3)
+
+    def test_bh_select(self):
+        from deaiify.structural import _bh_select
+        pvals = [("a", 0.001), ("b", 0.04), ("c", 0.9)]
+        sel = _bh_select(pvals, 0.10)
+        self.assertIn("a", sel)
+        self.assertNotIn("c", sel)
+
+
 if __name__ == "__main__":
     unittest.main()
