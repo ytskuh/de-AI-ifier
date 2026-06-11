@@ -156,16 +156,24 @@ def prose(path: Path) -> str:
     return "\n\n".join(text for _, text in paragraphs(path))
 
 
-def biber_features(docs: list[tuple[str, str]], normalize: bool = True):
+def biber_features(docs: list[tuple[str, str]], normalize: bool = True,
+                   with_tokens: bool = False):
     """docs: (doc_id, prose_text) -> polars DataFrame, one row per doc.
-    normalize=True gives per-1k rates; False gives raw counts."""
+    normalize=True gives per-1k-TOKEN rates; False gives raw counts.
+    with_tokens=True also returns {doc_id: spaCy token count} — the exposure
+    rates are normalized by, needed wherever counts are pooled."""
     import polars as pl
     from pybiber import CorpusProcessor
 
     corp = pl.DataFrame({"doc_id": [d for d, _ in docs], "text": [t for _, t in docs]})
     tokens = CorpusProcessor().process_corpus(corp, _nlp())
     from pybiber import biber
-    return biber(tokens, normalize=normalize)
+    out = biber(tokens, normalize=normalize)
+    if with_tokens:
+        # pybiber normalizes per 1000 NON-PUNCTUATION tokens — exposure must match
+        tc = tokens.filter(pl.col("pos") != "PUNCT").group_by("doc_id").len()
+        return out, dict(zip(tc["doc_id"].to_list(), tc["len"].to_list()))
+    return out
 
 
 SEGMENT_WORDS = 1000
@@ -273,34 +281,82 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
     return findings
 
 
+def simulated_bands(seg_data: dict, w_tokens: int, m: int = 2000, seed: int = 0):
+    """Length-matched null bands via hierarchical block bootstrap (design):
+    pick a corpus document, resample ITS segments with replacement to
+    ~w_tokens, pool counts to a per-1k-token rate. Document choice carries the
+    between-author component; whole-segment blocks preserve within-document
+    clustering (self-correlation) that Poisson noise would understate."""
+    import numpy as np
+    cols = list(seg_data["counts"].keys())
+    C = np.array([seg_data["counts"][c] for c in cols], dtype=float)  # [F, S]
+    t = np.asarray(seg_data["tokens"], dtype=float)
+    docs = np.asarray(seg_data["doc"])
+    by_doc = [np.where(docs == d)[0] for d in np.unique(docs)]
+    rng = np.random.default_rng(seed)
+    rates = np.empty((m, len(cols)))
+    for j in range(m):
+        segs = by_doc[rng.integers(len(by_doc))]
+        picked, tok = [], 0.0
+        while tok < w_tokens:
+            i = int(segs[rng.integers(len(segs))])
+            picked.append(i)
+            tok += t[i]
+        rates[j] = 1000.0 * C[:, picked].sum(axis=1) / tok
+    out = {}
+    for k, col in enumerate(cols):
+        r = rates[:, k]
+        out[col] = {"band": [float(np.quantile(r, 0.05)), float(np.quantile(r, 0.50)),
+                             float(np.quantile(r, 0.95))],
+                    "sd": float(r.std())}
+    return out
+
+
 def run(path: Path, profile: dict) -> list[Finding]:
     text = prose(path)
-    feats = biber_features([(path.name, text)]).to_dicts()[0]
-    # granularity-matched bands: short targets compare against 1k-segment bands
-    use_seg = (len(text.split()) < 2500 and profile.get("features_seg"))
-    band_set = profile["features_seg"] if use_seg else profile["features"]
-    basis = "1k-seg" if use_seg else "doc"
+    feats_df, tokmap = biber_features([(path.name, text)], with_tokens=True)
+    feats = feats_df.to_dicts()[0]
+    w_tokens = max(1, int(next(iter(tokmap.values()))))
+    seg_data = profile.get("seg_data") or {}
     flagged = []
-    for col, band in band_set.items():
+    if seg_data.get("counts"):
+        sim = simulated_bands(seg_data, w_tokens)
+        basis = f"simulated @ {w_tokens} tokens"
+        items = [(col, sim[col]["band"], sim[col]["sd"]) for col in sim]
+        # the two non-rate features keep empirical doc bands
+        for col in ("f_43_type_token", "f_44_mean_word_length"):
+            if col in profile["features"]:
+                items.append((col, profile["features"][col], None))
+    else:  # legacy profile without seg_data: empirical bands, granularity-switched
+        use_seg = (len(text.split()) < 2500 and profile.get("features_seg"))
+        band_set = profile["features_seg"] if use_seg else profile["features"]
+        basis = "1k-seg (empirical)" if use_seg else "doc (empirical)"
+        items = [(col, band, None) for col, band in band_set.items()]
+
+    for col, band, sd in items:
         p05, p50, p95 = band
         v = feats.get(col)
         if v is None or p05 <= v <= p95:
             continue
-        width = max(p95 - p05, 1e-9)
-        # direction-free outlier magnitude: below-band is as diagnostic as above
-        excess = (p05 - v if v < p05 else v - p95) / width
+        if sd is not None and sd > 1e-9:
+            sigma = abs(v - p50) / sd
+        else:  # empirical fallback: band-width deviation as magnitude proxy
+            width = max(p95 - p05, 1e-9)
+            sigma = (p05 - v if v < p05 else v - p95) / width
         key = any(k in col for k in KEY_TELLS)
-        sev = min(0.6 + 0.2 * excess + (0.1 if key else 0.0), 0.95)
+        sev = min(0.55 + 0.06 * sigma + (0.1 if key else 0.0), 0.95)
         arrow = "↓" if v < p05 else "↑"
         gloss, above_hint, below_hint = FEATURE_INFO.get(
             col, (col.split("_", 2)[-1].replace("_", " "), "", ""))
         hint = below_hint if v < p05 else above_hint
-        msg = f"{gloss}: {v:.1f}/1k {arrow} band [{p05:.1f}–{p95:.1f}], median {p50:.1f}."
+        msg = (f"{gloss}: {v:.1f}/1k {arrow} band [{p05:.1f}–{p95:.1f}], "
+               f"median {p50:.1f}, {sigma:.1f}σ.")
         if hint:
             msg += f" Edit: {hint}."
-        flagged.append((excess, Finding(
+        flagged.append((sigma, Finding(
             0, (0, 0), "structural", f"biber:{col}", round(sev, 2), msg,
-            payload={"value": v, "band": band, "key_tell": key, "excess": round(excess, 2),
+            payload={"value": v, "band": [round(b, 2) for b in band], "key_tell": key,
+                     "excess": round(sigma, 2), "sigma": round(sigma, 2),
                      "gloss": gloss, "arrow": arrow, "hint": hint, "band_basis": basis})))
     flagged.sort(key=lambda t: -t[0])
     out = [f for _, f in flagged[:MAX_FINDINGS]]

@@ -59,13 +59,13 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
     con.print("[bold]── Document profile ──[/]")
     if biber:
         basis = biber[0].payload.get("band_basis", "doc")
-        tbl = Table(title=f"Structural rates vs baseline band [{basis} granularity] "
-                          f"(↑ above / ↓ below — both directions matter; sorted by deviation)")
+        tbl = Table(title=f"Structural rates vs human band — {basis} "
+                          f"(↑ above / ↓ below — both directions matter; sorted by σ)")
         tbl.add_column("feature", overflow="fold", max_width=34)
         tbl.add_column("rate/1k", justify="right")
         tbl.add_column("", justify="center")  # direction arrow
         tbl.add_column("band (p5–p95)", justify="right")
-        tbl.add_column("dev", justify="right")
+        tbl.add_column("σ", justify="right")
         tbl.add_column("edit hint", overflow="fold")
         for f in biber:
             p = f.payload

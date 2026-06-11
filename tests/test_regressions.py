@@ -148,5 +148,37 @@ class UnitMergingInvariants(unittest.TestCase):
         self.assertIn(5, units[-1])
 
 
+
+
+class SimulatedBandInvariants(unittest.TestCase):
+    """Length-matched bootstrap bands (user correction 2026-06-11: a band over
+    mixed-length documents is meaningless; variance must match target length)."""
+
+    @staticmethod
+    def _seg_data():
+        import numpy as np
+        rng = np.random.default_rng(3)
+        docs, tokens, counts = [], [], []
+        for d in range(6):
+            lam = rng.uniform(3, 9)  # between-doc rate variation
+            for _ in range(8):
+                tok = int(rng.uniform(900, 1300))
+                docs.append(f"d{d}"); tokens.append(tok)
+                counts.append(rng.poisson(lam * tok / 1000))
+        return {"doc": docs, "tokens": tokens, "counts": {"f_x": counts}}
+
+    def test_band_narrows_with_length(self):
+        from deaiify.structural import simulated_bands
+        sd_short = simulated_bands(self._seg_data(), 1000, m=600)["f_x"]["sd"]
+        sd_long = simulated_bands(self._seg_data(), 20000, m=600)["f_x"]["sd"]
+        self.assertLess(sd_long, sd_short)
+
+    def test_deterministic_given_seed(self):
+        from deaiify.structural import simulated_bands
+        a = simulated_bands(self._seg_data(), 5000, m=200)["f_x"]["band"]
+        b = simulated_bands(self._seg_data(), 5000, m=200)["f_x"]["band"]
+        self.assertEqual(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

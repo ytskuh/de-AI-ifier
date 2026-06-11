@@ -58,11 +58,23 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
         for j, seg in enumerate(structural._segments(f)):
             if seg["words"] >= structural.SEGMENT_WORDS // 2:
                 seg_docs.append((f"{f.name}#s{j}", seg["text"]))
-    features_seg = {}
+    features_seg, seg_data = {}, {}
     if len(seg_docs) >= 10:
         seg_feats = structural.biber_features(seg_docs)
         features_seg = {col: _band(seg_feats[col].to_list())
                         for col in seg_feats.columns if col != "doc_id"}
+        # raw per-segment counts + token exposure for the length-matched bootstrap
+        seg_counts, tok_counts = structural.biber_features(
+            seg_docs, normalize=False, with_tokens=True)
+        seg_counts = seg_counts.sort("doc_id")
+        ids = seg_counts["doc_id"].to_list()
+        seg_data = {
+            "doc": [i.split("#s")[0] for i in ids],
+            "tokens": [int(tok_counts[i]) for i in ids],
+            "counts": {col: [int(x) for x in seg_counts[col].to_list()]
+                       for col in seg_counts.columns
+                       if col not in ("doc_id", "f_43_type_token", "f_44_mean_word_length")},
+        }
     metric_bands = {}
     for key in ("sentence_length_cv", "paragraph_length_cv",
                 "lexical_warn_per_1k", "lexical_all_per_1k"):
@@ -73,6 +85,7 @@ def build(name: str, paths: list[Path], with_lexical: bool = True) -> dict:
     return {"name": name, "language": "en", "n_docs": len(docs),
             "docs": [d for d, _ in docs], "features": features,
             "features_seg": features_seg, "n_segments": len(seg_docs),
+            "seg_data": seg_data,
             "corpus_paths": [str(p) for p in paths],
             "metrics": metric_bands}
 
