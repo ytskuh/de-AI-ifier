@@ -51,7 +51,10 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
 
     biber = sorted((f for f in doc_level if "gloss" in f.payload),
                    key=lambda f: -f.payload["excess"])
-    other_doc = [f for f in doc_level if "gloss" not in f.payload]
+    seg = sorted((f for f in doc_level if "gloss_seg" in f.payload),
+                 key=lambda f: f.payload["p"])
+    other_doc = [f for f in doc_level
+                 if "gloss" not in f.payload and "gloss_seg" not in f.payload]
 
     con.print("[bold]── Document profile ──[/]")
     if biber:
@@ -70,9 +73,25 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
                         f"{p05:.1f}–{p95:.1f}", f"{p['excess']:.1f}×",
                         p["hint"] or "—", style=sev(f.severity))
         con.print(tbl)
+    if seg:
+        n_seg = len(seg[0].payload["residuals"])
+        st = Table(title=f"Within-document unevenness ({n_seg} segments; map: "
+                         f"↑ above / · normal / ↓ below the document's own rate)")
+        st.add_column("feature", overflow="fold", max_width=30)
+        st.add_column("p", justify="right")
+        st.add_column("rate/1k", justify="right")
+        st.add_column("band?", justify="center")
+        st.add_column("segment map")
+        st.add_column("worst segments", overflow="fold")
+        for f in seg:
+            p = f.payload
+            st.add_row(p["gloss_seg"], f"{p['p']:.3f}", f"{p['doc_rate']:.1f}",
+                       "in" if p["in_band"] else "out", p["map"],
+                       "; ".join(p["outliers"]), style=sev(f.severity))
+        con.print(st)
     for f in sorted(other_doc, key=lambda f: -f.severity):
         con.print(f"  • {f.message}", style=sev(f.severity))
-    if biber or other_doc:
+    if biber or seg or other_doc:
         con.print()
 
     by_rule: dict[str, list[Finding]] = {}

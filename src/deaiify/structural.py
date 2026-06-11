@@ -263,11 +263,13 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
                             f"({rate:.1f}/1k)")
         hidden = " — document-level rate is IN band; the imbalance is invisible without segmentation" if in_band else ""
         sev = min(0.6 + 0.05 * float(np.abs(resid).max()), 0.9)
+        seg_map = "".join("↑" if r > 2 else ("↓" if r < -2 else "·") for r in resid)
         findings.append(Finding(
             0, (0, 0), "structural", f"biber-seg:{col}", round(sev, 2),
             f"{gloss}: uneven across the document (q<{HET_FDR_Q}, p={p:.3f}); "
             f"doc rate {doc_rate:.1f}/1k; outlier segments: {'; '.join(outliers)}{hidden}.",
             payload={"p": p, "doc_rate": round(doc_rate, 2), "in_band": bool(in_band),
+                     "gloss_seg": gloss, "map": seg_map, "outliers": outliers,
                      "residuals": [round(float(r), 2) for r in resid]}))
     findings.sort(key=lambda f: f.payload["p"])
     return findings
