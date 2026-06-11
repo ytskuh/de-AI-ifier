@@ -49,10 +49,29 @@ def render_terminal(findings: list[Finding], meta: dict) -> None:
     doc_level = [f for f in findings if f.line == 0]
     line_level = [f for f in findings if f.line > 0]
 
-    if doc_level:
-        con.print("[bold]Document-level[/] (whole-text rates and scores, not occurrence counts; "
-                  "sorted by deviation — below band matters as much as above):")
-        for f in sorted(doc_level, key=lambda f: -f.payload.get("excess", f.severity)):
+    biber = sorted((f for f in doc_level if "gloss" in f.payload),
+                   key=lambda f: -f.payload["excess"])
+    other_doc = [f for f in doc_level if "gloss" not in f.payload]
+
+    if biber:
+        tbl = Table(title="Structural rates vs baseline band (↑ above / ↓ below — "
+                          "both directions matter; sorted by deviation)")
+        tbl.add_column("feature", overflow="fold", max_width=34)
+        tbl.add_column("rate/1k", justify="right")
+        tbl.add_column("", justify="center")  # direction arrow
+        tbl.add_column("band (p5–p95)", justify="right")
+        tbl.add_column("dev", justify="right")
+        tbl.add_column("edit hint", overflow="fold")
+        for f in biber:
+            p = f.payload
+            p05, p50, p95 = p["band"]
+            tbl.add_row(p["gloss"], f"{p['value']:.1f}", p["arrow"],
+                        f"{p05:.1f}–{p95:.1f}", f"{p['excess']:.1f}×",
+                        p["hint"] or "—", style=sev(f.severity))
+        con.print(tbl)
+    if other_doc:
+        con.print("[bold]Document-level[/]:")
+        for f in sorted(other_doc, key=lambda f: -f.severity):
             con.print(f"  • {f.message}", style=sev(f.severity))
         con.print()
 

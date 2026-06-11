@@ -180,16 +180,16 @@ def run(path: Path, profile: dict) -> list[Finding]:
         excess = (p05 - v if v < p05 else v - p95) / width
         key = any(k in col for k in KEY_TELLS)
         sev = min(0.6 + 0.2 * excess + (0.1 if key else 0.0), 0.95)
-        side = "below" if v < p05 else "above"
+        arrow = "↓" if v < p05 else "↑"
         gloss, above_hint, below_hint = FEATURE_INFO.get(
             col, (col.split("_", 2)[-1].replace("_", " "), "", ""))
         hint = below_hint if v < p05 else above_hint
-        msg = (f"{gloss}: {v:.1f}/1k, {side} the human band [{p05:.1f}–{p95:.1f}] "
-               f"(median {p50:.1f}).")
+        msg = f"{gloss}: {v:.1f}/1k {arrow} band [{p05:.1f}–{p95:.1f}], median {p50:.1f}."
         if hint:
             msg += f" Edit: {hint}."
         flagged.append((excess, Finding(
             0, (0, 0), "structural", f"biber:{col}", round(sev, 2), msg,
-            payload={"value": v, "band": band, "key_tell": key, "excess": round(excess, 2)})))
+            payload={"value": v, "band": band, "key_tell": key, "excess": round(excess, 2),
+                     "gloss": gloss, "arrow": arrow, "hint": hint})))
     flagged.sort(key=lambda t: -t[0])
     return [f for _, f in flagged[:MAX_FINDINGS]]
