@@ -159,14 +159,18 @@ the band — no separate count model is needed.
 - **Segmentation**: paragraphs accumulated into ~1,000-word segments (the same
   segmentation the profile's segment bands were built from). Requires ≥4
   segments; shorter documents are covered by the whole-document comparison.
-- **Per-cell check**: a segment is out-of-band for a feature when its per-1k rate
-  falls outside the profile's segment band [p5, p95]. By construction ~10% of
-  human segments fall outside per feature, so single cells mean nothing.
-- **Feature selection with multiplicity control**: per feature, the number of
-  out-of-band segments under the null is Binomial(S, 0.10); the feature's
-  p-value is the exact binomial tail, and features pass Benjamini–Hochberg at
-  FDR 0.10. A feature flags only when MORE segments are outside human range
-  than chance allows.
+- **Per-segment p**: each segment's rate gets an empirical two-sided tail
+  probability against the profile's stored human segment rates (the seg_data
+  raw counts/tokens, ~116 segments), with add-one smoothing; the resolution
+  floor is ≈2/(n+1).
+- **Feature significance WITHOUT cross-segment independence**: segments of one
+  document share an author and topic (self-correlation — one document-level
+  trait can push many segments out together), so out-of-band counts must NOT
+  be combined under an independence null (a binomial tail would manufacture
+  significance from a single correlated trait). The feature's p-value is the
+  MINIMUM per-segment p — exact under perfect correlation, conservative in
+  between — and features pass Benjamini–Hochberg at FDR 0.10 across features.
+  The out-of-band count and ↑/·/↓ map remain as description, not inference.
 - **Reporting**: a table — one row per flagged feature: binomial p, document
   rate with its own in/out marker, a one-character-per-segment map (↑ above the
   human segment band / · in band / ↓ below), and the worst segments with line
