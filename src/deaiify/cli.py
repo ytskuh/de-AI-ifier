@@ -107,8 +107,10 @@ def cmd_stat(args) -> int:
             d_p95 = band["sent_delta"][1]
             flagged = [s for s in r["sentences"] if s["b"] < b_p05 or s["delta"] > d_p95]
             flagged.sort(key=lambda s: s["b"])
-            print(f"  flagged sentences (B<p5={b_p05:.3f} or Δ>p95={d_p95:+.3f}): "
-                  f"{len(flagged)} of {len(r['sentences'])} eligible")
+            share = 100 * len(flagged) / max(1, len(r["sentences"]))
+            print(f"  flagged units (B<p5={b_p05:.3f} or Δ>p95={d_p95:+.3f}): "
+                  f"{len(flagged)} of {len(r['sentences'])} = {share:.0f}% "
+                  f"(chance level ≈10% — human text flags that much by construction)")
             for s in flagged[:args.top or len(flagged)]:
                 print(f"    L{s['line']:4d} B={s['b']:.3f} Δ={s['delta']:+.3f}  {s['text'][:64]!r}")
             if args.top and len(flagged) > args.top:
