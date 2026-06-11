@@ -192,15 +192,29 @@ the band — no separate count model is needed.
 - Profiles store p5/p50/p95 bands per Biber feature plus rhythm/lexical-density
   metrics; severity of structural findings scales with deviation measured in
   band-widths, direction-free (below band is as diagnostic as above).
-- **Bands are granularity-matched.** Rate variance shrinks with text length, so
-  a band computed over whole documents (8–25k words) is unfairly tight for a
-  1,000-word segment or a short file. Profiles therefore carry TWO band sets:
-  `features` from whole corpus documents, and `features_seg` from ~1,000-word
-  segments of those documents (same segmentation as the heterogeneity
-  analysis). A target is compared against the band of matched granularity:
-  documents ≥2,500 prose words use document bands; shorter targets use segment
-  bands; per-segment checks always use segment bands. The report labels which
-  basis applied.
+- **Document-level bands are LENGTH-MATCHED by hierarchical block bootstrap.**
+  Empirical bands over whole corpus documents conflate between-author variation
+  with length-dependent sampling noise (corpus docs span 8–25k words), so no
+  static band is fair for an arbitrary-length target. Instead the profile
+  stores the segment-level raw data (per segment: words and each feature's raw
+  count), and at report time the null distribution for a target of W prose
+  words is SIMULATED: M=2000 pseudo-documents, each built by picking a corpus
+  document and resampling its segments with replacement to ~W words, pooling
+  counts to a rate. Picking a document first preserves the between-author
+  component; resampling whole segments preserves within-document clustering
+  (self-correlation) at segment scale — feature occurrences are bursty, so
+  Poisson noise alone would understate variance. The report shows the
+  simulated p5–p95 band at the target's length and a simulated σ
+  (z = (rate − median)/SD of the simulation); a feature flags when outside the
+  band, sorted and sized by |z|. The same mechanism covers fragments and full
+  papers uniformly (no band-set switching). The two non-rate features
+  (type/token, mean word length) keep empirical doc bands. The per-segment
+  checks of the segmented analysis keep the empirical segment band — that
+  comparison is already granularity-matched by construction.
+- **Corpus-size honesty**: with n=15 documents the between-author tail is
+  estimated from 15 values; the bootstrap fixes length mismatch, not corpus
+  size. The report carries the n; growing the corpus (further seeded sampling
+  tranches) is the lever that tightens it.
 
 ## Validation record (kept honest, updates appended)
 
