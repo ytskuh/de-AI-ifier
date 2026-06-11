@@ -195,6 +195,15 @@ window of a rare feature would constantly over-flag on raw deviation).
 - Profiles store p5/p50/p95 bands per Biber feature plus rhythm/lexical-density
   metrics; severity of structural findings scales with deviation measured in
   band-widths, direction-free (below band is as diagnostic as above).
+- **Bands are granularity-matched.** Rate variance shrinks with text length, so
+  a band computed over whole documents (8–25k words) is unfairly tight for a
+  1,000-word segment or a short file. Profiles therefore carry TWO band sets:
+  `features` from whole corpus documents, and `features_seg` from ~1,000-word
+  segments of those documents (same segmentation as the heterogeneity
+  analysis). A target is compared against the band of matched granularity:
+  documents ≥2,500 prose words use document bands; shorter targets use segment
+  bands; per-segment checks always use segment bands. The report labels which
+  basis applied.
 
 ## Validation record (kept honest, updates appended)
 
