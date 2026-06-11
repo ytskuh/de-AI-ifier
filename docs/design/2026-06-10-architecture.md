@@ -105,6 +105,37 @@ cuts a 5-pair run from 10 model loads to one per unique model (currently 7).
 Chunking at n_ctx uses a 256-token overlap; scores are taken only for tokens with
 at least that much context.
 
+## Segmented structural analysis
+
+A long article can be in-band on every whole-document rate while one part runs far
+above and another far below — averages hide mixed authorship and section-local
+machine style. The segmented analysis detects this *statistically*, not by showing
+raw per-segment deviations (segment rates carry Poisson sampling noise; a 1k-word
+window of a rare feature would constantly over-flag on raw deviation).
+
+- **Segmentation**: paragraphs accumulated into ~1,000-word segments (format-
+  agnostic, line ranges retained). Analysis requires ≥4 segments; short documents
+  keep document-level treatment only.
+- **Counts, not rates**: per-segment raw feature counts (pybiber `normalize=False`)
+  with segment word counts as exposure.
+- **Within-document heterogeneity test** (the core): under the null, a feature's
+  occurrences scatter across segments as a multinomial proportional to segment
+  lengths. Statistic: max absolute Pearson residual over segments. P-value by
+  parametric bootstrap (999 multinomial simulations — exact for small counts, no
+  asymptotics, no scipy). Features with doc total < 10 are skipped. Benjamini–
+  Hochberg FDR across tested features; report q < 0.10.
+- **Reporting**: one document-level finding per heterogeneous feature: gloss,
+  q-value, and the outlier segments with line ranges, direction (↑/↓ vs the
+  document's own rate, residual in σ), plus whether the document-level rate is
+  in-band — the "in band overall but uneven inside" case is exactly the hidden
+  signature this exists to surface. Severity scales with max residual; findings
+  join the document-level block of the report.
+- **Band check per segment** (secondary): for features already flagged (doc-level
+  or heterogeneity), segments whose count is Poisson-significantly outside the
+  baseline band edges (P < 0.05 against the p5/p95 rate as null) are annotated;
+  this respects both between-document variance (the band) and within-segment
+  sampling noise (the Poisson tail), instead of comparing raw rates to the band.
+
 ## Corpora and profiles
 
 - **Topical baseline** (`data/baseline/topical/`): pre-LLM arXiv papers collected by
