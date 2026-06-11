@@ -34,5 +34,5 @@ deepened: YYYY-MM-DD # optional, set when the confidence check substantively str
 
 ### Document rules
 
- - Treat `README.md` and `docs/design` as source of truth. Keep the code consistent with design.
+ - Treat `README.md` and `docs/design` as source of truth. Design changes are written to the design doc BEFORE implementing them, based on the agreed decisions (not reverse-engineered from code); thereafter the design doc is kept consistent with the code — any change that would make them diverge updates both in the same change.
  - Persistent document researches and external material in `docs/reference`, brainstorms in `docs/brainstorm` and plans in `docs/plan`

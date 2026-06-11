@@ -1,115 +1,163 @@
 ---
-title: de-AI-ifier — concrete architecture
+title: de-AI-ifier — architecture
 type: design
 status: active
 date: 2026-06-10
 composition_mode: ai_generated
 origin: docs/brainstorms/2026-06-10-de-ai-ifier-tool-design.md
+deepened: 2026-06-11
 ---
 
-# de-AI-ifier — concrete architecture
+# de-AI-ifier — architecture
 
-Two layers: a deterministic Python CLI (`deaiify`, uv-managed) that does measurement and mechanical fixing, and a portable agentic skill that orchestrates judgment work (rewrites, baseline collection). Dependency facts verified against upstream repos/PyPI, June 2026.
+An editing assistant that localizes AI-writing tells in articles (markdown, plain
+text, LaTeX) and helps remove them while preserving meaning and the author's voice.
+Two layers of software: a deterministic Python CLI (`deaiify`, uv-managed) doing all
+measurement, and a portable agent skill that drives judgment edits. The human is the
+rewriter; the tool's job is to say where, why, and when to stop.
 
-Working principles for this build:
+Working principles (agreed across the project's sessions):
 
-- **Performance first, licensing later.** Use the best available component regardless of license; anything with a restrictive/missing license is marked ⚠ in the debt list below and swapped only if/when the tool is distributed.
-- **No speculative structure.** Start flat; split modules, add abstractions, or introduce interfaces only when a second concrete user of them exists. The stages below are strictly incremental — each ships something usable and nothing needed only by a later stage.
+- **Performance first, licensing later.** Use the best available component; anything
+  license-encumbered is marked ⚠ in the debt list and kept trivially excisable.
+- **No speculative structure.** Flat modules; abstractions appear when a second
+  concrete user exists. Each stage ships something usable.
+- **Existing public models only.** No fine-tuning, no paid generation pipelines.
+  A vendor axis with no working public performer stays absent and is reported as
+  *untested* — never as "clean".
+- **Detection without judgment theater.** Rankings and baseline-relative bands, not
+  verdicts; calibrated thresholds don't transfer across model pairs, so we never
+  print a binary "AI/human" classification.
+- **Averages are not enough.** Every score ships with its distribution: quantiles,
+  concentration/clustering, per-sentence and per-token-class breakdowns. A clean
+  mean with a rotten tail is a rotten document.
 
-## Components (verified June 2026)
+## The three layers
 
-| Layer | Tool | Source / version | Use |
+| Layer | Instrument | Output | Fix path |
 |---|---|---|---|
-| Lexical engine | **Vale** | v3.14.2, `vale-cli/vale` (Go binary, subprocess, `--output=JSON`) | the lexical runtime |
-| Lexical rules | **tbhb/vale-ai-tells** | v1.16.0 (2026-06), 50+ rules, cites Reinhart PNAS 2025 | consume via `vale sync` |
-| Lexical rules | **JMill/deslop** | v0.1.0 (2026-06), ~17 rules | consume via `vale sync` |
-| Lexical rules | **Nous ANTI-SLOP.md** (`NousResearch/autonovel`) | 3 tiered ban tables + 9 structural patterns, parse directly | ⚠ unlicensed |
-| Lexical rules | **Wikipedia "Signs of AI writing"** | phrase lists per section | ⚠ CC BY-SA if redistributed |
-| Lexical word lists | **Kobak excess_words.csv** (`berenslab/llm-excess-vocab`, MIT) | 900 words, filter `type=style` | compile → generated Vale style |
-| Lexical n-grams | **slop-forensics** (`sam-paech/slop-forensics`, MIT) | `data/slop_list{,_bigrams,_trigrams}.json`; 10 per-model profiles | compile → generated Vale style |
-| Parser | **spaCy 3.8** | `en_core_web_sm` (LAS ~90); `trf` to validate patterns | structural detectors |
-| Structural features | **pybiber 0.3.1** (PyPI, MIT) | `PybiberPipeline`, per-1,000-word rates by default | feature extraction |
-| Default baseline | **HAP-E corpus** (`browndw/human-ai-parallel-corpus-biber`, HF, MIT) | pre-extracted Biber matrices, 6 genres | derive default percentile bands offline |
-| Statistical scorer | **ngpepin/binoculars** | llama.cpp full-logit Binoculars: logPPL/logXPPL per chunk, hotspot top-K, heatmaps, CLI + `--json` + HTTP API; CPU-viable, ~6–7 GB for a Q5 8B pair (sequential load) | drive via CLI/JSON. ⚠ PolyForm-NC + bus-factor 1 — reimplement on llama-cpp-python before distribution |
-| Statistical 2nd signal | **Fast-DetectGPT** (`baoguangsheng/fast-detect-gpt`, MIT, active) | curvature method; GPT-Neo-2.7B cheapest config | optional cross-check, vendor the scoring function |
-| Rewrite LLM | host agent of the skill | — | CLI never calls an LLM |
+| Lexical | Vale subprocess: `ai-tells` + `Deslop` packages + generated `Deaiify` style (Kobak excess words, slop-forensics lists, Nous tables) | per-span findings with severity | human rewrite; mechanical fixes exist but are **banned** (below) |
+| Structural | pybiber's 67 Biber features per 1k words vs a baseline profile's p5–p95 bands | document-level rate table with ↑/↓ direction, deviation in band-widths, direction-specific edit hint | human edits a few instances of the offending construction |
+| Statistical | observer/performer GGUF pairs (Binoculars B + log-likelihood-ratio Δ) | per-pair doc scores + sentence ranking + token-class distributions | human rewrites top-ranked sentences in own words; **no model-assisted rewriting ever** (model tokens lower perplexity → more machine-like; verified empirically via GPTZero regression) |
 
-### ⚠ License debt (deliberate, revisit before any distribution)
+Above all three: content genericity (paragraphs with no numbers/names/citations/math)
+— only the author can fix; heuristic flags only.
 
-1. `ngpepin/binoculars` — PolyForm-Noncommercial. Fine for personal use now; the metric is from a public paper and the design is documented, so reimplementation on llama-cpp-python (MIT) is ~300 lines when needed.
-2. Rules parsed from Nous ANTI-SLOP.md — repo has no license. Keep them in a separate generated file (`Deaiify/nous.yml`) so they're trivially excisable.
-3. Rules derived from Wikipedia's page — CC BY-SA; same isolation strategy (`Deaiify/wikipedia.yml`).
-
-## Statistical layer: diversified model ensemble
-
-Don't anchor the probability reference to a single model family. Detection strength tracks distribution match between scorer and generator, and families have distinct house styles (PNAS finding), so a single-family scorer over-flags that family's style and under-flags others.
-
-- **Pairs, not pools**: the Binoculars metric requires observer/performer with identical tokenizers, so each scoring unit is a within-family base/instruct pair (Llama 3.1 8B, Qwen2.5 7B, Mistral 7B, …). Diversity = multiple pairs.
-- **Rank aggregation, not score averaging**: B-scores aren't comparable across pairs. Each pair ranks sentences by machine-likeness; aggregate by mean rank or "top-K in ≥2 pairs". Consensus hotspots are high-confidence; single-family flags are advisory.
-- **Match one pair to the drafting model**: the most informative reference is the family that generated the draft. Config = drafting-model pair + 1–2 diverse pairs.
-- **Incremental**: ship with one pair; the config is already a list, adding a pair is a config entry, not code. Memory stays flat (pairs load sequentially); wall-clock scales linearly — acceptable since this runs once per polishing session, not per keystroke.
-- **Pair ensemble status (2026-06-11)**: 5 pairs in `models/pairs.json`. VALIDATED: `gpt5chat-gad` and `gpt5chat-sft` (both 160k real GPT-5-Chat responses on Llama-3.1-8B; held-out GPT text scores B 0.79/0.84 + Δ>0 vs ≥0.99 + Δ<0 for Claude/human text — volume SFT on real production prose works; GAD gives deeper B dips, SFT gives calibrated Δ — keep both). NEGATIVE RESULT: `qwen35-claude46` (Jackrong 3k-sample reasoning LoRA) does not separate Claude prose at all — small reasoning-trace LoRAs learn the `<think>` format, not the prose distribution; this rules out the entire TeichAI/lordx64-class of distills as performers. The Claude axis therefore has NO working performer; the evidence-backed fix is replicating the ytz20 recipe (LMSYS prompts → Claude API → volume SFT on Qwen3.5-9B-Base). Scoring text is content-tokens only (letters), with Δ quantiles + hot-token burstiness/window-concentration to distinguish localized machine passages from global register effects.
-- **Validated empirically (2026-06-10, Llama-3.1-8B Q8 pair)**: text generated by the performer itself scores B≈0.50 vs ≈1.01–1.05 for human texts and for 2026-era Claude output — i.e. the pair separates its own family perfectly but does NOT flag modern cross-family LLM text (Claude prose scored *more* surprising than human L2-learner essays). Two consequences, both anticipated by the design: (a) the pair matched to the user's actual drafting model is not an optimization, it is the difference between working and not working; (b) doc-level B comparisons across registers are confounded — simple prose scores lower B than sophisticated prose regardless of authorship — so only the within-document sentence ranking and same-register comparisons are meaningful. The instruct-excess Δ (log-likelihood ratio, per the user's design idea) separated human texts (Δ ≤ −0.11/token) from suspect LLM-assisted text (−0.085) even cross-family in this small sample; worth tracking as its own signal.
-
-## Repository organization
-
-Flat package; split a module only when it outgrows one file.
+## CLI surface
 
 ```
-de-AI-ifier/
-├── pyproject.toml          # uv; extra [stat] for the statistical layer deps
-├── src/deaiify/
-│   ├── cli.py              # typer: report / fix / check / baseline
-│   ├── findings.py         # Finding dataclass + report merge/render (split later if needed)
-│   ├── lexical.py          # Vale subprocess → Findings
-│   ├── structural.py       # pybiber rates vs baseline + spaCy DependencyMatcher patterns
-│   ├── heuristics.py       # uniformity (length CV, punct density) + genericity (number/claim density)
-│   ├── statistical.py      # [stat] ngpepin/binoculars CLI driver, ensemble rank aggregation
-│   ├── baseline.py         # corpus → percentile-band profile JSON; load/store
-│   └── fixes.py            # AUTO transforms → unified diff
-├── rulepacks/en/           # vale.ini + generated Deaiify style (committed, regenerable)
-├── profiles/en-default.json
-├── tools/build_rulepacks.py  # pinned upstream sources → Deaiify/*.yml (one file per source)
-├── skills/deaiify/SKILL.md
-└── tests/                  # golden-file fixtures per scorer
+deaiify report <file> [--profile NAME] [--stat] [--min-severity X] [--json]
+deaiify stat <file> [--pair NAME|all] [--classes] [--consensus] [--top N]
+deaiify baseline build --name NAME <files-or-dirs>
+deaiify stat calibrate <files-or-dirs>        # per-pair human bands, see below
+deaiify fix <file>                            # BANNED: warns and exits
 ```
 
-Deliberately absent until proven necessary: a `lang/` adapter layer (language-readiness = a `lang` tag on rulepacks/profiles and no hardcoded English in `findings.py`; adapters get built when Chinese work actually starts), per-model slop packs (the aggregated lists first; per-model only if flags prove too generic), an HTTP API, prompt-template library (templates live inline in SKILL.md until there are too many).
+Decisions made and to hold:
 
-## Data flow
+- **`check` is removed.** `report` is the single reading surface; a separate
+  pass/fail gate duplicated it with arbitrary thresholds and ignored the
+  statistical layer. Stopping criterion = report shows rates inside bands and no
+  consensus statistical outliers.
+- **`fix` is banned until precision work is done.** The mechanical engine produced
+  three real bugs during development (multi-word collision, POS-changing swap,
+  comparative-context swap); the guards caught classes, not instances. The command
+  now emits a warning and refuses. Code stays for future re-enable behind that
+  warning; the lexical findings still tell the human what to edit.
+- The startup hints (`[setup]` lines) point fresh checkouts at README setup; they
+  stay silent when everything exists.
 
-Every scorer emits `Finding(span, layer, rule, severity, message, fix_class, payload)`; report, fix engine, and skill all consume that one shape.
+## Statistical layer design
 
-```
-article.md ─┬ lexical.py      Vale JSON (ai-tells, Deslop, Deaiify)
-            ├ structural.py   pybiber rates vs profile bands + dependency patterns
-            ├ heuristics.py   length CV, em-dash density, per-paragraph fact density
-            └ statistical.py  [opt] per-sentence rank across model pairs
-                    ↓
-            findings.py: dedupe overlaps, rank, attach fix class
-                    ↓
-   report (rich terminal / .report.md / .report.json)
-   fix    (AUTO findings → one reviewable unified diff)
-   check  (layer scores vs profile bands → pass/fail + deltas)
-```
+**Pairs** are configured in `models/pairs.json`: named (observer, performer) GGUF
+file pairs with an `axis` description. Observer = pretrained base (or nearest);
+performer = instruct/distill whose distribution approximates a target vendor.
+Plain-text tokenizer identity is asserted at load. Current ensemble: `gpt5chat-gad`
+(default — strongest validated separation), `gpt5chat-sft` (best-calibrated Δ),
+`llama31-rlhf`, `qwen35-rlhf`, `qwen35-claude46` (known-weak, kept as documentation
+of the negative result).
 
-Severity is baseline-relative: Biber features flag only outside the profile's 5th–95th percentile band; lexical hits on words the personal profile shows the user genuinely uses are suppressed; statistical output is a ranking ("your N most machine-like sentences"), never a verdict — published thresholds don't transfer across model pairs.
+**Scores.** Per token: logprob under both models; Δ = lp_perf − lp_obs; xent =
+−Σ_v P_obs(v)·log P_perf(v) (formula matched to the ahans30/Binoculars reference).
+Per sentence and per document (content tokens only — tokens containing a letter):
+B = logPPL_perf / xent (low = machine-typical), Δ mean and q10/50/90, hot-token
+(Δ > doc q90) burstiness and max 50-token window share, and per-token-class
+distributions (spaCy POS classes + curated transition list + punctuation/symbols).
+Sentences that are mostly non-letter tokens (leaked math) are excluded from
+rankings. Vendor fingerprint: all-classes-negative Δ profile = "not this vendor".
 
-## The agentic skill
+**Calibration (new).** `deaiify stat calibrate <corpus>` scores every corpus
+document on every available pair and stores per-pair human bands (p5/p50/p95 of
+doc-level B and Δ) in `models/stat-bands.json`. `stat` and `report --stat` then
+annotate scores as inside/below the human band, making the statistical layer
+baseline-relative like the structural layer — bands from the same topical corpus
+the structural profile uses. Rankings remain the primary per-sentence output.
 
-`skills/deaiify/SKILL.md`: plain markdown + CLI invocations, portable across agent runtimes (no runtime-specific APIs). Encodes:
+**Consensus (new).** `stat --consensus` aggregates sentence rankings across all
+available pairs: per sentence, mean normalized B-rank and the count of pairs with
+Δ>0. Sentences machine-like on multiple independent vendor axes are the priority
+rewrites; low-B with Δ≤0 everywhere is generic boilerplate (human-normal).
 
-1. **Session loop**: `report` → apply `fix` diff → span-by-span constrained rewrites for ASSIST findings ("split this participial tail into a finite clause; do not add adjectives; preserve all facts") → present HUMAN findings (statistical hotspots, genericity flags) for manual editing → `check`; stop when bands pass.
-2. **Topical baseline collection**: gather human-written same-register material, then `deaiify baseline build --tag <topic>`. To avoid search bias — especially *agentic* search bias (the model picking papers it knows, or phrasing queries in its own idiom) — collection must be systematic, not judgment-based: define the population by declared filters (e.g. arXiv primary categories × pre-ChatGPT date window × journal-ref/DOI quality proxy), enumerate it via a relevance-free ordering, and take a seeded uniform random sample. The agent chooses *population parameters* (declared and recorded in the manifest), never individual documents. Implemented in `tools/collect_topical_baseline.py`; for post-2022 sources, additionally gate candidates through the CLI's own scorers to reject LLM-generated text.
-3. **Guardrails**: never whole-article "humanize this" prompts; facts and numbers are immutable tokens.
+**Efficiency (new).** Within one document scoring run: tokenize once per tokenizer
+family; evaluate each unique model once (cache per-token logprobs + fp16
+log-softmax in RAM); derive every pair's B/Δ/xent from the cached arrays. This
+cuts a 5-pair run from 10 model loads to one per unique model (currently 7).
+Chunking at n_ctx uses a 256-token overlap; scores are taken only for tokens with
+at least that much context.
 
-## Stages (each ships something usable)
+## Corpora and profiles
 
-1. **Report**: `cli.py`, `findings.py`, `lexical.py`, `heuristics.py`, `tools/build_rulepacks.py`, minimal SKILL.md. Day-one value: ranked hotspot report, no models.
-2. **Baseline + fix**: `structural.py`, `baseline.py`, `profiles/en-default.json` (from HAP-E), `fixes.py`. Band-based `check`, mechanical `fix`.
-3. **Statistical**: `statistical.py` driving ngpepin/binoculars, one pair first, ensemble via config.
-4. **Full skill**: assisted rewrites, topical baseline collection.
+- **Topical baseline** (`data/baseline/topical/`): pre-LLM arXiv papers collected by
+  seeded uniform random sampling over declared filters (categories × pre-ChatGPT
+  window × journal-ref/DOI) — the agent never picks papers, eliminating agentic
+  search bias. LaTeX sources preferred (format-identical to targets). Profile:
+  `profiles/topical-arxiv.json`. Straggler downloads are retried opportunistically;
+  extending the sample = more draws from the same seeded stream.
+- **Personal baseline**: built locally by the user from their own pre-LLM writing;
+  profile `profiles/personal.json` (gitignored). The repo carries no personal file
+  names, no personal corpus tooling, and no personal data — including in git
+  history. Known defect fixed 2026-06-11: legacy .doc extraction leaked OOXML
+  markup into six corpus files; the extraction filter now rejects markup lines and
+  the profile is rebuilt.
+- Profiles store p5/p50/p95 bands per Biber feature plus rhythm/lexical-density
+  metrics; severity of structural findings scales with deviation measured in
+  band-widths, direction-free (below band is as diagnostic as above).
 
-## Open questions
+## Validation record (kept honest, updates appended)
 
-Personal pre-LLM corpus — exists? size? Which LLM drafts the articles (selects the matched statistical pair and, later, per-model slop pack)? Local hardware for the GGUF pairs?
+- 2026-06-10: Llama-3.1-8B pair separates its own family perfectly (self-test
+  B≈0.50 vs ≈1.0) and is blind to other vendors. Detection is family-specific —
+  pair-to-drafting-model match is the difference between working and not working.
+- 2026-06-11: volume SFT on real production prose works as a performer
+  (GPT-5-Chat pairs: held-out GPT text B 0.79/0.84, Δ>0; human/Claude text ≥0.99,
+  Δ<0). Small reasoning-trace LoRA distills do NOT shift prose distribution
+  (Claude-4.6 distill inseparable from noise) — that class of model is ruled out.
+- 2026-06-11: agent/LLM "humanizing" rewrites lower perplexity and worsen
+  detector scores (GPTZero) — the basis for the no-model-rewrites rule.
+
+## Testing policy
+
+Only tests that lock in bugs that actually happened or invariants that broke once:
+the rulepack table parser (Nous section-leak), the fix engine's three historical
+bugs (kept for the future re-enable), and LaTeX prose extraction (math/preamble
+stripping, markup-junk rejection). No coverage-driven test generation.
+
+## ⚠ License debt (revisit before any formal distribution)
+
+1. Rules parsed from Nous ANTI-SLOP.md (`rulepacks/en/Deaiify/Nous*.yml`) — upstream
+   has no license; isolated in their own files, excisable by deletion.
+2. ngpepin/binoculars — PolyForm-NC; **approach only** (sequential GGUF loading,
+   hotspot localization); none of its code is used.
+3. Model weights downloaded by users carry their own licenses; none are
+   redistributed.
+
+## Open / future
+
+- Claude detection axis: no working public performer exists (2026-06); revisit when
+  a volume prose distill appears. Until then verdicts say "Claude untested".
+- Re-enable `fix` after span-safety work (grapheme-safe spans, POS-checked swaps,
+  golden corpus green).
+- Per-model lexical packs (slop-forensics per-model profiles) once the user's
+  drafting model is known.
+- Chinese support = new Language adapter bundle (parser, rule packs, segmenter);
+  rule packs and profiles already carry a language tag.
