@@ -113,19 +113,30 @@ class LatexExtractionRegression(unittest.TestCase):
 
 
 class SegmentBandInvariants(unittest.TestCase):
-    """Segment analysis references the PROFILE band, with binomial multiplicity
-    control (user correction 2026-06-11: human band, not the document's own
-    rate; single out-of-band cells are chance at ~10%)."""
+    """Segment significance: per-segment empirical two-sided p with min-over-
+    segments aggregation — NO independence across segments (user corrections
+    2026-06-11: human reference; self-correlation forbids binomial pooling)."""
 
-    def test_binomial_tail_and_selection(self):
-        from deaiify.structural import _binom_tail, _bh_select
-        # 1 of 12 segments outside band: chance (p ~ 0.72) — must not flag
-        self.assertGreater(_binom_tail(1, 12, 0.10), 0.5)
-        # 6 of 12 outside: far beyond chance — must flag
-        self.assertLess(_binom_tail(6, 12, 0.10), 0.001)
-        sel = _bh_select([("chance", _binom_tail(1, 12, 0.10)),
-                          ("real", _binom_tail(6, 12, 0.10))], 0.10)
-        self.assertEqual(sel, {"real"})
+    def test_empirical_two_sided_p(self):
+        import numpy as np
+        from deaiify.structural import _empirical_two_sided_p
+        ref = np.arange(1.0, 117.0)  # 116 human segment rates
+        # at the median: p ~ 1; beyond every human segment: p at the floor
+        self.assertGreater(_empirical_two_sided_p(58.0, ref), 0.9)
+        self.assertAlmostEqual(_empirical_two_sided_p(500.0, ref), 2 / 117, places=6)
+        # min-p over segments must not shrink with more in-band segments
+        # (no independence bonus): one extreme segment alone sets the p
+        p_alone = _empirical_two_sided_p(500.0, ref)
+        p_with_normals = min([_empirical_two_sided_p(500.0, ref)] +
+                             [_empirical_two_sided_p(60.0, ref)] * 11)
+        self.assertEqual(p_alone, p_with_normals)
+
+    def test_bh_select(self):
+        from deaiify.structural import _bh_select
+        pvals = [("a", 0.001), ("b", 0.04), ("c", 0.9)]
+        sel = _bh_select(pvals, 0.10)
+        self.assertIn("a", sel)
+        self.assertNotIn("c", sel)
 
 
 class UnitMergingInvariants(unittest.TestCase):

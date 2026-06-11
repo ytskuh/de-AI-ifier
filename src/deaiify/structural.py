@@ -201,10 +201,14 @@ def _segments(path: Path) -> list[dict]:
     return segs
 
 
-def _binom_tail(k: int, n: int, p: float) -> float:
-    """Exact P(X >= k) for X ~ Binomial(n, p)."""
-    from math import comb
-    return float(sum(comb(n, i) * p**i * (1 - p)**(n - i) for i in range(k, n + 1)))
+def _empirical_two_sided_p(value: float, reference: "np.ndarray") -> float:
+    """Two-sided tail of value in an empirical reference sample, add-one
+    smoothed; floor = 2/(n+1). Used per segment against human segment rates."""
+    import numpy as np
+    n = len(reference)
+    lo = (1 + int((reference <= value).sum())) / (n + 1)
+    hi = (1 + int((reference >= value).sum())) / (n + 1)
+    return float(min(1.0, 2 * min(lo, hi)))
 
 
 def _bh_select(pvals: list[tuple[str, float]], q: float) -> set[str]:
@@ -219,64 +223,65 @@ def _bh_select(pvals: list[tuple[str, float]], q: float) -> set[str]:
 
 
 def segment_findings(path: Path, profile: dict) -> list[Finding]:
-    """Segments vs the PROFILE's segment-granularity bands (design: segmented
-    analysis). The reference for abnormal is human writing, never the document
-    itself; binomial tail + BH control the 67-feature multiplicity."""
-    seg_bands = profile.get("features_seg")
-    if not seg_bands:
+    """Segments vs the PROFILE's human segment-rate distributions. Feature
+    significance is the MINIMUM per-segment empirical p — segments of one
+    document are self-correlated, so no independence-based aggregation
+    (design: segmented analysis). The out-of-band map is description only."""
+    import numpy as np
+
+    seg_data = profile.get("seg_data") or {}
+    if not seg_data.get("counts"):
         return []
     segs = _segments(path)
     if len(segs) < MIN_SEGMENTS:
         return []
     rates_df = biber_features(
         [(f"seg{i:03d}", s["text"]) for i, s in enumerate(segs)]).sort("doc_id")
+    human_tokens = np.asarray(seg_data["tokens"], dtype=float)
     total_words = sum(s["words"] for s in segs)
 
     tested = {}
-    for col, band in seg_bands.items():
-        if col in ("f_43_type_token", "f_44_mean_word_length"):
-            continue  # not rates
-        p05, _, p95 = band
+    for col, counts in seg_data["counts"].items():
+        human_rates = 1000.0 * np.asarray(counts, dtype=float) / human_tokens
+        p05, p95 = float(np.quantile(human_rates, 0.05)), float(np.quantile(human_rates, 0.95))
         rates = rates_df[col].to_numpy()
+        seg_p = np.array([_empirical_two_sided_p(r, human_rates) for r in rates])
         side = [(1 if r > p95 else (-1 if r < p05 else 0)) for r in rates]
-        k = sum(1 for s in side if s != 0)
-        if k == 0:
+        if not any(side):
             continue
-        tested[col] = (_binom_tail(k, len(segs), SEG_NULL_RATE), side, rates)
+        tested[col] = (float(seg_p.min()), seg_p, side, rates, (p05, p95))
     if not tested:
         return []
     selected = _bh_select([(c_, v[0]) for c_, v in tested.items()], SEG_FDR_Q)
 
     findings = []
     for col in selected:
-        p, side, rates = tested[col]
-        band = seg_bands[col]
+        p_min, seg_p, side, rates, (p05, p95) = tested[col]
         gloss = FEATURE_INFO.get(col, (col.split("_", 2)[-1].replace("_", " "), "", ""))[0]
-        doc_band = profile["features"].get(col, band)
         doc_rate = float(sum(r * s["words"] for r, s in zip(rates, segs)) / total_words)
-        in_band = doc_band[0] <= doc_rate <= doc_band[2]
+        band = profile["features"].get(col)
+        in_band = bool(band and band[0] <= doc_rate <= band[2])
         seg_map = "".join("↑" if s > 0 else ("↓" if s < 0 else "·") for s in side)
         outliers = []
-        order = sorted(range(len(segs)), key=lambda i: -abs(rates[i] - band[1]))
-        for i in order:
+        for i in np.argsort(seg_p):  # worst segments = lowest per-segment p
             if side[i] == 0 or len(outliers) >= 3:
                 continue
             seg = segs[i]
             arrow = "↑" if side[i] > 0 else "↓"
             outliers.append(f"L{seg['start']}–{seg['end']} {arrow} {rates[i]:.1f}/1k")
-        hidden = (" — document-level rate is IN band; the local deviations are invisible "
+        hidden = (" — document-level rate is IN band; the local deviation is invisible "
                   "without segmentation") if in_band else ""
         n_out = sum(1 for s in side if s != 0)
-        sev = min(0.6 + 0.05 * n_out, 0.9)
+        sev = min(0.6 + 0.15 * max(0.0, -float(np.log10(p_min)) - 1), 0.9)
         findings.append(Finding(
             0, (0, 0), "structural", f"biber-seg:{col}", round(sev, 2),
-            f"{gloss}: {n_out}/{len(segs)} segments outside the human segment band "
-            f"[{band[0]:.1f}–{band[2]:.1f}] (binomial p={p:.4f}); doc rate "
-            f"{doc_rate:.1f}/1k; worst: {'; '.join(outliers)}{hidden}.",
-            payload={"p": p, "doc_rate": round(doc_rate, 2), "in_band": bool(in_band),
+            f"{gloss}: most extreme segment p={p_min:.3f} (min over segments, no "
+            f"independence assumed); {n_out}/{len(segs)} segments outside the human "
+            f"segment range [{p05:.1f}–{p95:.1f}]; doc rate {doc_rate:.1f}/1k; "
+            f"worst: {'; '.join(outliers)}{hidden}.",
+            payload={"p": p_min, "doc_rate": round(doc_rate, 2), "in_band": in_band,
                      "gloss_seg": gloss, "map": seg_map, "outliers": outliers,
-                     "band": [round(band[0], 2), round(band[2], 2)],
-                     "n_out": n_out}))
+                     "band": [round(p05, 2), round(p95, 2)], "n_out": n_out}))
     findings.sort(key=lambda f: f.payload["p"])
     return findings
 
