@@ -107,8 +107,7 @@ class _DocScorer:
     def __init__(self, path: Path):
         self.path = path
         self._family = {}   # family key -> doc tokenization dict
-        self._evals = {}    # model file -> (family_key, lp, [lsm fp16 per chunk], [score slices])
-        self._classes = None
+        self._evals = {}    # model file -> (lp per token, [lsm fp16 per chunk])
 
     def _vocab(self, model_file: str):
         from llama_cpp import Llama
@@ -156,10 +155,9 @@ class _DocScorer:
             scored.append((s0, first_scored, len(chunk)))
             if s0 + N_CTX >= len(tokens):
                 break
-        if self._classes is None:
-            self._classes = np.asarray(_token_classes(text, tok_span))
         self._family[key] = {
             "sents": sents, "tokens": tokens, "tok_sent": np.asarray(tok_sent),
+            "classes": np.asarray(_token_classes(text, tok_span)),
             "content": np.array([bool(re.search(r"[a-zA-Z]", t)) for t in tok_text]),
             "chunks": chunks, "scored": scored, "n": len(tokens),
         }
@@ -203,7 +201,7 @@ class _DocScorer:
             xc = -np.einsum("ij,ij->i", p_obs, l_p.astype(np.float32))
             xent[s0 + first:s0 + clen] = xc[first - 1:]
 
-        tok_class = self._classes
+        tok_class = fam["classes"]
         valid = ~np.isnan(lp_obs) & fam["content"]
         delta = lp_perf - lp_obs
 
