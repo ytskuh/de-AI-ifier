@@ -32,7 +32,7 @@ BANDS_FILE = MODELS / "stat-bands.json"
 N_CTX = 4096
 OVERLAP = 256
 TOP_K = 10           # display cap / uncalibrated-ranking fallback
-MIN_SENT_CONTENT = 15  # sentences below this many content tokens are not B/Δ-evaluated
+MIN_UNIT_WORDS = 12   # consecutive prose sentences merge forward into >=12-word units
 HOT_WINDOW = 50
 _PROBE = "We prove that the sampler converges; results follow."
 
@@ -63,6 +63,36 @@ def _clean(s: str) -> str:
     s = re.sub(r"(?<=\s)\*|\*(?=\s)", "", s)
     s = re.sub(r"~+", " ", s)
     return re.sub(r"\s+", " ", s).strip(" ,;:")
+
+
+def _is_prose(s: str) -> bool:
+    """Leaked math/markup is not prose: require half the non-space chars be letters."""
+    chars = [ch for ch in s if not ch.isspace()]
+    if not chars:
+        return False
+    letters = sum(ch.isalpha() for ch in chars)
+    return letters / len(chars) >= 0.5
+
+
+def _build_units(sents: list[tuple]) -> list[list[int]]:
+    """Merge consecutive prose sentences forward into >=MIN_UNIT_WORDS-word units.
+    Every prose sentence lands in exactly one unit; a short trailing remainder
+    joins the previous unit. Word-based, so identical across tokenizer families."""
+    units, cur, words = [], [], 0
+    for i, (_, s) in enumerate(sents):
+        if not _is_prose(s):
+            continue
+        cur.append(i)
+        words += len(s.split())
+        if words >= MIN_UNIT_WORDS:
+            units.append(cur)
+            cur, words = [], 0
+    if cur:
+        if units:
+            units[-1] += cur
+        else:
+            units.append(cur)
+    return units
 
 
 def _log_softmax(x: np.ndarray) -> np.ndarray:
@@ -224,13 +254,14 @@ class _DocScorer:
                              "logppl_perf": round(float(-lp_perf[m].mean()), 3)}
 
         per_sent = []
-        for i, (line, s) in enumerate(fam["sents"]):
-            m = (fam["tok_sent"] == i) & valid
-            all_m = (fam["tok_sent"] == i) & scoreable
-            if m.sum() < MIN_SENT_CONTENT or m.sum() < 0.6 * all_m.sum():
+        for unit in _build_units(fam["sents"]):
+            m = np.isin(fam["tok_sent"], unit) & valid
+            if m.sum() < 5:
                 continue
+            line = fam["sents"][unit[0]][0]
+            text = " ".join(fam["sents"][i][1] for i in unit)
             per_sent.append({
-                "i": i, "line": line, "text": s,
+                "i": unit[0], "line": line, "text": text, "n_sents": len(unit),
                 "b": float(-lp_perf[m].mean() / max(xent[m].mean(), 1e-6)),
                 "delta": float(delta[m].mean()),
                 "hot_share": float((delta[m] > hot_thresh).mean()),

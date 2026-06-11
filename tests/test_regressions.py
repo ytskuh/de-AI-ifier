@@ -137,5 +137,27 @@ class SegmentHeterogeneityInvariants(unittest.TestCase):
         self.assertNotIn("c", sel)
 
 
+
+
+class UnitMergingInvariants(unittest.TestCase):
+    """Units merge short sentences forward — no prose sentence is skipped
+    (user correction 2026-06-11: eligibility must not drop coverage)."""
+
+    def test_every_prose_sentence_in_exactly_one_unit(self):
+        from deaiify.statistical import _build_units, _is_prose
+        sents = [(1, "Short one."), (2, "Tiny."), (3, "A much longer sentence with plenty of words inside it."),
+                 (4, "x = y + z ^ 2 $$"), (5, "Another short."), (6, "Tail.")]
+        units = _build_units(sents)
+        covered = [i for u in units for i in u]
+        prose = [i for i, (_, s) in enumerate(sents) if _is_prose(s)]
+        self.assertEqual(sorted(covered), prose)        # all prose covered, math excluded
+        self.assertEqual(len(set(covered)), len(covered))  # no sentence twice
+        for u in units[:-1]:
+            words = sum(len(sents[i][1].split()) for i in u)
+            self.assertGreaterEqual(words, 12)
+        # trailing remainder merged into the previous unit, not dropped
+        self.assertIn(5, units[-1])
+
+
 if __name__ == "__main__":
     unittest.main()
