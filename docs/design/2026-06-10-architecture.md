@@ -144,39 +144,31 @@ one top-to-bottom worklist:
 ## Segmented structural analysis
 
 A long article can be in-band on every whole-document rate while one part runs far
-above and another far below — averages hide mixed authorship and section-local
-machine style. The segmented analysis detects this *statistically*, not by showing
-raw per-segment deviations (segment rates carry Poisson sampling noise; a 1k-word
-window of a rare feature would constantly over-flag on raw deviation).
+outside human range — averages hide localized machine style. The segmented
+analysis compares every ~1,000-word segment against the PROFILE's
+segment-granularity bands (`features_seg`), not against the document's own rate:
+the reference for "abnormal" is always human writing, and because the bands are
+built from same-sized human segments, segment sampling noise is already inside
+the band — no separate count model is needed.
 
-- **Segmentation**: paragraphs accumulated into ~1,000-word segments (format-
-  agnostic, line ranges retained). Analysis requires ≥4 segments; short documents
-  keep document-level treatment only.
-- **Counts, not rates**: per-segment raw feature counts (pybiber `normalize=False`)
-  with segment word counts as exposure.
-- **Within-document heterogeneity test** (the core): under the null, a feature's
-  occurrences scatter across segments as a multinomial proportional to segment
-  lengths. Statistic: max absolute Pearson residual over segments. P-value by
-  parametric bootstrap (999 multinomial simulations — exact for small counts, no
-  asymptotics, no scipy). Features with doc total < 10 are skipped. Benjamini–
-  Hochberg FDR across tested features; report q < 0.10.
-- **Reporting**: one document-level finding per heterogeneous feature: gloss,
-  q-value, and the outlier segments with line ranges, direction (↑/↓ vs the
-  document's own rate, residual in σ), plus whether the document-level rate is
-  in-band — the "in band overall but uneven inside" case is exactly the hidden
-  signature this exists to surface. Severity scales with max residual; findings
-  join the document-level block of the report.
-- **Band check per segment** (secondary): for features already flagged (doc-level
-  or heterogeneity), segments whose count is Poisson-significantly outside the
-  baseline band edges (P < 0.05 against the p5/p95 rate as null) are annotated;
-  this respects both between-document variance (the band) and within-segment
-  sampling noise (the Poisson tail), instead of comparing raw rates to the band.
-- **Interpretation caveat (by design)**: sections of any real paper differ
-  grammatically (proofs vs introduction), so heterogeneity locates register
-  shifts; it does not by itself prove mixed authorship. Future extension:
-  calibrate heterogeneity against the human corpus (distribution of per-feature
-  max-residuals across the baseline papers) so findings read "more uneven than
-  human papers of this register", mirroring the band philosophy.
+- **Segmentation**: paragraphs accumulated into ~1,000-word segments (the same
+  segmentation the profile's segment bands were built from). Requires ≥4
+  segments; shorter documents are covered by the whole-document comparison.
+- **Per-cell check**: a segment is out-of-band for a feature when its per-1k rate
+  falls outside the profile's segment band [p5, p95]. By construction ~10% of
+  human segments fall outside per feature, so single cells mean nothing.
+- **Feature selection with multiplicity control**: per feature, the number of
+  out-of-band segments under the null is Binomial(S, 0.10); the feature's
+  p-value is the exact binomial tail, and features pass Benjamini–Hochberg at
+  FDR 0.10. A feature flags only when MORE segments are outside human range
+  than chance allows.
+- **Reporting**: a table — one row per flagged feature: binomial p, document
+  rate with its own in/out marker, a one-character-per-segment map (↑ above the
+  human segment band / · in band / ↓ below), and the worst segments with line
+  ranges and rates. The "in-band overall, locally outside" case is the hidden
+  signature this exists to surface.
+- **Scope note**: a document whose halves sit at opposite ends of the band but
+  inside it is not flagged — in-band means within human range by definition.
 
 ## Corpora and profiles
 
