@@ -14,3 +14,6 @@ models/*
 # (sources live in data/personal/, articles under polish in data/targets/)
 data/
 profiles/personal.json
+
+# Nous-derived rules: unlicensed upstream, opt-in via build_rulepacks.py --include-nous
+rulepacks/en/Deaiify/Nous*.yml

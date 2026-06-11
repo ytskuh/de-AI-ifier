@@ -3,10 +3,11 @@
 Sources (fetched from main/master at run time, retrieval noted in headers):
 - Kobak et al. excess_words.csv (berenslab/llm-excess-vocab, MIT)
 - slop-forensics curated lists (sam-paech/slop-forensics, MIT)
-- Nous ANTI-SLOP.md tables (NousResearch/autonovel, NO LICENSE — kept in
-  separate Nous*.yml files so they are trivially excisable; do not distribute)
+- Nous ANTI-SLOP.md tables (NousResearch/autonovel, NO LICENSE) — OPT-IN only
+  (`--include-nous`); written to gitignored Nous*.yml for local private use,
+  never committed or redistributed by this repo.
 
-Run: uv run python tools/build_rulepacks.py
+Run: uv run python tools/build_rulepacks.py [--include-nous]
 """
 
 import csv
@@ -162,11 +163,25 @@ def nous_rules():
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Generate the Deaiify Vale style.")
+    ap.add_argument("--include-nous", action="store_true",
+                    help="also generate Nous*.yml from NousResearch/autonovel ANTI-SLOP.md. "
+                         "Upstream has NO license (all-rights-reserved); these files are "
+                         "gitignored and must not be redistributed — local private use only.")
+    args = ap.parse_args()
+
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"generating {OUT}")
     kobak_rules()
     slop_forensics_rules()
-    nous_rules()
+    if args.include_nous:
+        print("  (--include-nous: writing gitignored, unlicensed Nous*.yml — do not redistribute)")
+        nous_rules()
+    else:
+        for f in OUT.glob("Nous*.yml"):  # keep the tree consistent with the default build
+            f.unlink()
+        print("  Nous rules skipped (opt in with --include-nous; see README §License)")
 
 
 if __name__ == "__main__":
