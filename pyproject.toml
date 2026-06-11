@@ -3,6 +3,8 @@ name = "deaiify"
 version = "0.1.0"
 description = "Editing assistant that localizes and fixes AI-writing tells in articles"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "rich>=13",
     "pyyaml>=6",

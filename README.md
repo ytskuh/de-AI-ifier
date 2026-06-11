@@ -50,9 +50,6 @@ mkdir -p bin && curl -sL https://github.com/vale-cli/vale/releases/download/v3.1
 uv run python tools/build_rulepacks.py    # regenerate rulepacks/en/Deaiify from upstream lists
 ```
 
-(The statistical deps live in a default dependency group rather than an extra so
-that plain `uv run` invocations don't re-sync the environment back and forth.)
-
 The CLI prints `[setup]` hints on startup for whatever is still missing.
 
 ### Data (not in the repo — populate locally)
@@ -167,7 +164,7 @@ paraphrasing tools are losing — detectors train on humanizer output).
 
 ## License
 
-Project code is MIT. The generated `Deaiify` style and all shipped rules derive
+Project code is [MIT](LICENSE). The generated `Deaiify` style and all shipped rules derive
 only from MIT sources (Kobak excess words, slop-forensics); `vale-ai-tells` and
 `Deslop` are MIT packages fetched at runtime, not vendored.
 
