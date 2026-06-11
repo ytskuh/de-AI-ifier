@@ -83,8 +83,19 @@ Per sentence and per document (content tokens only — tokens containing a lette
 B = logPPL_perf / xent (low = machine-typical), Δ mean and q10/50/90, hot-token
 (Δ > doc q90) burstiness and max 50-token window share, and per-token-class
 distributions (spaCy POS classes + curated transition list + punctuation/symbols).
-Sentences that are mostly non-letter tokens (leaked math) are excluded from
-rankings. Vendor fingerprint: all-classes-negative Δ profile = "not this vendor".
+Vendor fingerprint: all-classes-negative Δ profile = "not this vendor".
+
+**Sentence eligibility and thresholds.** A sentence enters B/Δ evaluation only
+with ≥15 content tokens (short sentences carry too much sampling variance — a
+6-token sentence reaches extreme B on noise — and mostly-non-letter "sentences"
+are leaked math) . Sentence flagging is THRESHOLD-based, not top-K: calibration
+stores sentence-level human bands per pair (p1/p5/p50 of B over all eligible
+baseline-corpus sentences, p95/p99 of Δ), and a sentence is flagged when its B
+falls below the human sentence p5 (strong: p1) or its Δ rises above p95. However
+many sentences cross the threshold is how many findings there are — zero on a
+clean document, all of them on a generated one. Without calibration bands the
+layer reports document scores and the ranking only (explicitly labeled
+uncalibrated), not flags.
 
 **Calibration (new).** `deaiify stat calibrate <corpus>` scores every corpus
 document on every available pair and stores per-pair human bands (p5/p50/p95 of
@@ -104,6 +115,24 @@ log-softmax in RAM); derive every pair's B/Δ/xent from the cached arrays. This
 cuts a 5-pair run from 10 model loads to one per unique model (currently 7).
 Chunking at n_ctx uses a 256-token overlap; scores are taken only for tokens with
 at least that much context.
+
+## Report output organization
+
+The report is organized for direct editing — one pass of document context, then
+one top-to-bottom worklist:
+
+1. **Document profile** (a single document-wide section): the structural rate
+   table (feature, rate, ↑/↓, band, deviation, hint), segment-heterogeneity
+   findings (line ranges of register shifts), rhythm/uniformity metrics, and —
+   with --stat — per-pair document scores with band verdicts. These are context
+   and direction-setting, not individually editable spans; there are no other
+   document-level sections.
+2. **Recurring patterns**: a compact rule→count summary line (no examples), so
+   repeated tells are visible without duplicating the worklist.
+3. **Edit worklist**: every location-bound finding from all layers (lexical
+   spans, threshold-flagged statistical sentences, genericity paragraphs) in one
+   table sorted by line number — the intended use is editing the document top to
+   bottom alongside it.
 
 ## Segmented structural analysis
 
