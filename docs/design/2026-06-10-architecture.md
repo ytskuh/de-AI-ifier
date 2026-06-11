@@ -101,12 +101,17 @@ above p95. However many units cross the threshold is how many findings there
 are — zero on a clean document. Without calibration bands the layer reports
 document scores and a ranking only (explicitly labeled uncalibrated).
 
-**Calibration (new).** `deaiify stat calibrate <corpus>` scores every corpus
-document on every available pair and stores per-pair human bands (p5/p50/p95 of
-doc-level B and Δ) in `models/stat-bands.json`. `stat` and `report --stat` then
-annotate scores as inside/below the human band, making the statistical layer
-baseline-relative like the structural layer — bands from the same topical corpus
-the structural profile uses. Rankings remain the primary per-sentence output.
+**Calibration.** `deaiify stat --calibrate <corpus>` scores corpus documents on
+pairs and stores per-pair human bands (doc-level B and Δ p5/p50/p95, unit-level
+B p1/p5/p50 and Δ p50/p95/p99) in `models/stat-bands.json`, merging per pair so
+adding a model later calibrates only that pair. Profiles record the corpus
+paths they were built from (`corpus_paths`), and `report --stat --profile X`
+AUTO-CALIBRATES a missing pair against that profile's corpus before scoring —
+one-time per pair, with a console notice (calibration is minutes, not seconds).
+The bare `stat` command never auto-calibrates (it has no profile context);
+uncalibrated pairs there fall back to the labeled ranking. Scores are annotated
+inside/below the human band, making the statistical layer baseline-relative
+like the structural layer.
 
 **Consensus (new).** `stat --consensus` aggregates sentence rankings across all
 available pairs: per sentence, mean normalized B-rank and the count of pairs with
