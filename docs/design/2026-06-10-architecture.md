@@ -85,17 +85,21 @@ B = logPPL_perf / xent (low = machine-typical), Δ mean and q10/50/90, hot-token
 distributions (spaCy POS classes + curated transition list + punctuation/symbols).
 Vendor fingerprint: all-classes-negative Δ profile = "not this vendor".
 
-**Sentence eligibility and thresholds.** A sentence enters B/Δ evaluation only
-with ≥15 content tokens (short sentences carry too much sampling variance — a
-6-token sentence reaches extreme B on noise — and mostly-non-letter "sentences"
-are leaked math) . Sentence flagging is THRESHOLD-based, not top-K: calibration
-stores sentence-level human bands per pair (p1/p5/p50 of B over all eligible
-baseline-corpus sentences, p95/p99 of Δ), and a sentence is flagged when its B
-falls below the human sentence p5 (strong: p1) or its Δ rises above p95. However
-many sentences cross the threshold is how many findings there are — zero on a
-clean document, all of them on a generated one. Without calibration bands the
-layer reports document scores and the ranking only (explicitly labeled
-uncalibrated), not flags.
+**Evaluation units and thresholds.** Short sentences carry too much sampling
+variance for B (a 6-token sentence reaches extreme scores on noise), but no
+sentence may be silently skipped. Scoring therefore operates on UNITS:
+consecutive prose sentences are merged forward until a unit reaches ≥12 words;
+a trailing remainder joins the previous unit. Every prose sentence belongs to
+exactly one unit. (Mostly-non-letter "sentences" — leaked math/markup, <50%
+letter characters — are extraction artifacts, not prose, and are excluded from
+units.) Unit boundaries are computed from words of the shared cleaned text, so
+they are identical across tokenizer families and consensus can aggregate by
+unit. Flagging is THRESHOLD-based, not top-K: calibration stores unit-level
+human bands per pair (p1/p5/p50 of B over all baseline-corpus units, p95/p99 of
+Δ); a unit is flagged when B falls below the human p5 (strong: p1) or Δ rises
+above p95. However many units cross the threshold is how many findings there
+are — zero on a clean document. Without calibration bands the layer reports
+document scores and a ranking only (explicitly labeled uncalibrated).
 
 **Calibration (new).** `deaiify stat calibrate <corpus>` scores every corpus
 document on every available pair and stores per-pair human bands (p5/p50/p95 of
