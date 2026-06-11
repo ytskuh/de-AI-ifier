@@ -126,9 +126,12 @@ The report is organized for direct editing — one pass of document context, the
 one top-to-bottom worklist:
 
 1. **Document profile** (a single document-wide section): the structural rate
-   table (feature, rate, ↑/↓, band, deviation, hint), segment-heterogeneity
-   findings (line ranges of register shifts), rhythm/uniformity metrics, and —
-   with --stat — per-pair document scores with band verdicts. These are context
+   table (feature, rate, ↑/↓, band, deviation, hint); a segment-heterogeneity
+   TABLE — one row per uneven feature: significance, doc rate, in-band marker,
+   a one-character-per-segment map (↑/·/↓ by residual) showing where in the
+   document the feature swings, and the worst segment line ranges; rhythm/
+   uniformity metrics; and — with --stat — per-pair document scores with band
+   verdicts. These are context
    and direction-setting, not individually editable spans; there are no other
    document-level sections.
 2. **Recurring patterns**: a compact rule→count summary line (no examples), so
