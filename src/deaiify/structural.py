@@ -263,6 +263,7 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
     if not tested:
         return []
     selected = _bh_select([(c_, v[0]) for c_, v in tested.items()], SEG_FDR_Q)
+    bh_cutoff = SEG_FDR_Q * max(1, len(selected)) / max(1, len(tested))
 
     findings = []
     for col in selected:
@@ -291,6 +292,7 @@ def segment_findings(path: Path, profile: dict) -> list[Finding]:
             f"segment range [{p05:.1f}–{p95:.1f}]; doc rate {doc_rate:.1f}/1k; "
             f"worst: {'; '.join(outliers)}{hidden}.",
             payload={"p": p_min, "at_floor": at_floor, "beyond": round(beyond, 2),
+                     "m_tested": len(tested), "bh_cutoff": round(bh_cutoff, 4),
                      "doc_rate": round(doc_rate, 2), "in_band": in_band,
                      "gloss_seg": gloss, "map": seg_map, "outliers": outliers,
                      "band": [round(p05, 2), round(p95, 2)], "n_out": n_out}))
