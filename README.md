@@ -7,8 +7,8 @@ voice. Design: [docs/design/2026-06-10-architecture.md](docs/design/2026-06-10-a
 ## Status: Stage 3 (report + baselines + check + fix + statistical layer)
 
 ```bash
-uv run deaiify report <article.md|.txt|.tex> [--profile topical-arxiv] [--stat] [--json]
-uv run deaiify stat <article> [--pair NAME|all] [--classes] [--consensus] [--top N]
+uv run deaiify report <article.md|.txt|.tex> [--profile topical-arxiv] [--stat [fast|full]] [--json]
+uv run deaiify stat <article> [--pair NAME|all|fast] [--classes] [--consensus] [--top N]
 uv run deaiify stat --calibrate <human-corpus>  # per-pair human bands for stat scores
 uv run deaiify baseline build --name <tag> <files-or-dirs>
 # `fix` is DISABLED pending precision work; `check` was removed — report is the

@@ -61,7 +61,7 @@ You (the agent) drive the judgment edits; the human rewrites statistical finding
 ## Statistical layer (Stage 3)
 
 ```bash
-uv run deaiify stat <article> --classes        # all pairs in models/pairs.json
+uv run deaiify stat <article> --pair all --classes   # full: all pairs (default is fast = strongest pair)
 uv run deaiify stat <article> --pair gpt5chat-sft   # one vendor axis
 ```
 

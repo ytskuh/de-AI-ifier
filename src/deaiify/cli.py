@@ -26,7 +26,7 @@ def _setup_hints() -> None:
         print(f"[setup] {h}", file=sys.stderr)
 
 
-def _all_findings(path: Path, profile_name: str | None, with_stat: bool = False):
+def _all_findings(path: Path, profile_name: str | None, with_stat: str | None = None):
     lex = lexical.run(path)
     heur, metrics = heuristics.run(path)
     extra = []
@@ -39,14 +39,15 @@ def _all_findings(path: Path, profile_name: str | None, with_stat: bool = False)
         if profile_name:
             from . import baseline
             corpus = baseline.load(profile_name).get("corpus_paths")
-        sfind, smetrics = statistical.run(path, corpus_paths=corpus)  # all pairs
+        sfind, smetrics = statistical.run(path, corpus_paths=corpus,
+                                          full=(with_stat == "full"))
         extra += sfind
         metrics.update(smetrics)
     return F.merge(lex + heur + extra), metrics
 
 
 def cmd_report(args) -> int:
-    merged, metrics = _all_findings(args.file, args.profile, getattr(args, "stat", False))
+    merged, metrics = _all_findings(args.file, args.profile, getattr(args, "stat", None))
     merged = [f for f in merged if f.severity >= args.min_severity]
     words = max(1, metrics.get("words", 1))
     meta = {"file": str(args.file), **metrics,
@@ -76,7 +77,12 @@ def cmd_stat(args) -> int:
         return 0
     if args.file is None:
         sys.exit("stat needs a file (or --calibrate <corpus>)")
-    results = statistical.run_all(args.file, None if args.pair == "all" else args.pair)
+    if args.consensus or args.pair == "all":
+        results = statistical.run_all(args.file)
+    else:
+        only = args.pair if args.pair != "fast" else None
+        pair = statistical.load_pairs(only)[0]
+        results = [r for r in [statistical.score_pair(args.file, pair)] if r]
     if args.consensus:
         rows = statistical.consensus(results, top=args.top or 10)
         print(f"consensus over {len(results)} pairs (low rank = machine-like on many axes; "
@@ -139,13 +145,16 @@ def main() -> None:
     rep.add_argument("--json", action="store_true")
     rep.add_argument("--min-severity", type=float, default=0.0)
     rep.add_argument("--profile", help="baseline profile for structural comparison")
-    rep.add_argument("--stat", action="store_true",
-                     help="add statistical layer (needs [stat] extra + GGUF pair in models/)")
+    rep.add_argument("--stat", nargs="?", const="fast", choices=["fast", "full"],
+                     default=None,
+                     help="add statistical layer: fast = default pair (default), "
+                          "full = all pairs in models/pairs.json")
     rep.set_defaults(fn=cmd_report)
 
     st = sub.add_parser("stat", help="statistical scores (B + performer-tilt, per model pair)")
     st.add_argument("file", type=Path, nargs="?")
-    st.add_argument("--pair", default="all", help="pair name from models/pairs.json (default: all)")
+    st.add_argument("--pair", default="fast",
+                    help="pair name, 'all' (full), or 'fast' = default pair (default)")
     st.add_argument("--top", type=int, default=3, help="top machine-like sentences per pair")
     st.add_argument("--classes", action="store_true",
                     help="show score distribution by token class (POS, transitions, punctuation)")

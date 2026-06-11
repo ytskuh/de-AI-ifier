@@ -373,12 +373,16 @@ def calibrate(paths: list[Path], only_pairs: list[str] | None = None) -> dict:
 
 
 def run(path: Path, pair_name: str | None = None,
-        corpus_paths: list | None = None) -> tuple[list[Finding], dict]:
-    """Findings for report --stat: EVERY available pair (design: per-pair
-    document scores + vendor-axis coverage), auto-calibrating each missing
-    pair against the profile corpus when one is provided."""
+        corpus_paths: list | None = None, full: bool = False) -> tuple[list[Finding], dict]:
+    """Findings for report --stat. FAST (default): the default pair only, with
+    an explicit skipped-axes note. FULL: every available pair (design:
+    statistical depth). Missing pairs auto-calibrate against the profile corpus."""
     import sys
     pairs = load_pairs(pair_name)
+    skipped = []
+    if not full and len(pairs) > 1:
+        skipped = [p["name"] for p in pairs[1:]]
+        pairs = pairs[:1]
     if corpus_paths:
         missing = [p["name"] for p in pairs if "sent_b" not in load_bands().get(p["name"], {})]
         if missing:
@@ -424,4 +428,11 @@ def run(path: Path, pair_name: str | None = None,
                         f"Δ={s['delta']:+.3f} above human unit band (p95={d_p95:+.3f}) — "
                         f"leans toward {pair.get('axis') or 'the performer'}.",
                         match=s["text"][:90], payload={"b": s["b"], "delta": s["delta"]}))
+    if skipped:
+        findings.append(Finding(
+            0, (0, 0), "statistical", "stat:fast-mode", 0.3,
+            f"fast stat: only '{pairs[0]['name']}' scored; vendor axes UNTESTED (not clean): "
+            f"{', '.join(skipped)}. Run with --stat full for coverage.",
+            payload={"skipped": skipped}))
+        metrics["stat_skipped_pairs"] = skipped
     return findings, metrics
